@@ -141,8 +141,15 @@ def opencl_unified_perception(p1s_np, p2s_np, centers_np, radii_np, tile_map_buf
     # --- Create Buffers ---
     p1s_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=p1s_np.astype(np.float32))
     p2s_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=p2s_np.astype(np.float32))
-    centers_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=centers_np.astype(np.float32))
-    radii_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=radii_np.astype(np.float32))
+
+    # Handle case where there are no circles to avoid creating a zero-size buffer
+    if num_circles > 0:
+        centers_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=centers_np.astype(np.float32))
+        radii_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=radii_np.astype(np.float32))
+    else:
+        # Create dummy buffers of size 1, they won't be read by the kernel since num_circles is 0
+        centers_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY, 1)
+        radii_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY, 1)
 
     out_distances_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=num_whiskers * np.dtype(np.float32).itemsize)
     out_indices_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=num_whiskers * np.dtype(np.int32).itemsize)
