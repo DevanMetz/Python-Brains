@@ -8,13 +8,14 @@ class Unit:
     """
     Represents a single unit in the game, controlled by an MLP brain.
     """
-    def __init__(self, x, y, tile_map, brain=None, num_whiskers=7, whisker_length=150, perceivable_types=None):
+    def __init__(self, id, x, y, tile_map, brain=None, num_whiskers=7, whisker_length=150, perceivable_types=None):
+        self.id = id
         self.position = pygame.Vector2(x, y)
         self.tile_map = tile_map
         self.angle = np.random.uniform(0, 2 * np.pi) # Facing direction in radians
         self.velocity = pygame.Vector2(0, 0)
-        self.size = 10 # Radius for drawing and collision
-        self.color = (0, 150, 255) # Blue
+        self.size = 10
+        self.color = (0, 150, 255)
         self.speed = 2.0
         self.type = "unit"
         self.damage_dealt = 0
@@ -25,13 +26,32 @@ class Unit:
         self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "target", "unit"]
 
         self.attack_cooldown = 0
-        self.max_cooldown = 30 # Can fire every 30 frames
+        self.max_cooldown = 30
 
         if self.num_whiskers > 1:
             self.whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, self.num_whiskers)
         else:
             self.whisker_angles = np.array([0]) # Single whisker facing forward
         self.whisker_debug_info = [] # To store data for drawing
+
+    def to_dict(self):
+        """
+        Serializes the unit's state to a dictionary for multiprocessing.
+        Note: The brain is passed directly as it's picklable (thanks to numpy).
+        The tile_map is not included as it's handled globally in worker processes.
+        """
+        return {
+            "id": self.id,
+            "position": (self.position.x, self.position.y),
+            "angle": self.angle,
+            "velocity": (self.velocity.x, self.velocity.y),
+            "size": self.size,
+            "type": self.type,
+            "brain": self.brain,
+            "num_whiskers": self.num_whiskers,
+            "whisker_length": self.whisker_length,
+            "perceivable_types": self.perceivable_types,
+        }
 
     def get_inputs(self, world_objects, target):
         """
@@ -202,10 +222,19 @@ class Wall:
 class Target:
     """Represents the target the unit should seek."""
     def __init__(self, x, y):
+        self.id = -1 # Static ID for the target
         self.position = pygame.Vector2(x, y)
         self.size = 15
-        self.color = (0, 255, 0) # Green
+        self.color = (0, 255, 0)
         self.type = "target"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "position": (self.position.x, self.position.y),
+            "size": self.size,
+            "type": self.type,
+        }
 
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
@@ -213,11 +242,21 @@ class Target:
 class Enemy:
     """Represents a stationary enemy with health."""
     def __init__(self, x, y):
+        self.id = -2 # Static ID for the enemy
         self.position = pygame.Vector2(x, y)
         self.size = 15
-        self.color = (255, 0, 0) # Red
+        self.color = (255, 0, 0)
         self.health = 100
         self.type = "enemy"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "position": (self.position.x, self.position.y),
+            "size": self.size,
+            "type": self.type,
+            "health": self.health,
+        }
 
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)

@@ -100,6 +100,15 @@ class MLP:
 
         return child
 
+    def clone(self):
+        """
+        Creates a deep copy of the MLP instance.
+        """
+        cloned_mlp = MLP(self.layer_sizes)
+        cloned_mlp.weights = [w.copy() for w in self.weights]
+        cloned_mlp.biases = [b.copy() for b in self.biases]
+        return cloned_mlp
+
     def mutate(self, mutation_rate=0.01, mutation_amount=0.1):
         """
         Randomly mutates the weights and biases of the MLP.
