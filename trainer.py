@@ -2,6 +2,7 @@ import numpy as np
 import json
 import os
 import pygame
+from functools import partial
 from multiprocessing import Pool, cpu_count
 from game import Unit, Target, Wall, Enemy, line_circle_intersection
 from mlp import MLP
@@ -20,13 +21,10 @@ def init_worker(tile_map):
     _tile_map_global = tile_map
 
 
-def get_unit_inputs(unit_data, world_objects_data, target_pos_data):
+def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_data):
     """
-    A standalone version of the Unit.get_inputs method.
-    This function is designed to be called from a worker process.
-    It operates on simplified data structures (tuples, dicts) instead of full objects.
+    A standalone version of the Unit.get_inputs method, modified to return debug info.
     """
-    # Unpack data
     unit_pos = pygame.Vector2(unit_data['position'])
     unit_angle = unit_data['angle']
     num_whiskers = unit_data['num_whiskers']
@@ -35,10 +33,10 @@ def get_unit_inputs(unit_data, world_objects_data, target_pos_data):
     unit_velocity = pygame.Vector2(unit_data['velocity'])
 
     whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, num_whiskers) if num_whiskers > 1 else np.array([0])
+    whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
+    whisker_debug_info = []
 
-    # --- Whisker Calculations ---
-    num_perceivables = len(perceivable_types)
-    whisker_inputs = np.zeros((num_whiskers, num_perceivables))
+    all_objects_data = world_objects_data + [d for d in population_data if d['id'] != unit_data['id']]
 
     for i, whisker_angle in enumerate(whisker_angles):
         abs_angle = unit_angle + whisker_angle
@@ -47,8 +45,8 @@ def get_unit_inputs(unit_data, world_objects_data, target_pos_data):
 
         closest_dist = whisker_length
         detected_type = None
+        closest_intersect_point = end_point
 
-        # Detect Walls from the global tile_map
         if "wall" in perceivable_types:
             dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
             steps = max(abs(dx), abs(dy))
@@ -61,31 +59,31 @@ def get_unit_inputs(unit_data, world_objects_data, target_pos_data):
                     if _tile_map_global.get_tile(grid_x, grid_y) == Tile.WALL:
                         closest_dist = unit_pos.distance_to(pygame.Vector2(x, y))
                         detected_type = "wall"
+                        closest_intersect_point = pygame.Vector2(x, y)
                         break
                     x += x_inc
                     y += y_inc
 
-        # Detect other objects
-        # Create a temporary list of all objects to check against, excluding the unit itself
-        all_objects_data = world_objects_data + [d for d in unit_data.get('population_data', []) if d['id'] != unit_data['id']]
-
         for obj_data in all_objects_data:
-            # Skip self-check - this is now redundant if population_data is filtered, but safe
-            if obj_data['id'] == unit_data.get('id') and obj_data['type'] == 'unit':
-                continue
-
             dist = line_circle_intersection(start_point, end_point, pygame.Vector2(obj_data['position']), obj_data['size'])
             if dist is not None and dist < closest_dist:
                 closest_dist = dist
                 detected_type = obj_data['type']
+                closest_intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle))
+
+        # Store debug info regardless of hit, so we can draw the whisker's full length
+        whisker_debug_info.append({
+            'start': (start_point.x, start_point.y),
+            'end': (closest_intersect_point.x, closest_intersect_point.y),
+            'full_end': (end_point.x, end_point.y),
+            'type': detected_type
+        })
 
         if detected_type and detected_type in perceivable_types:
             type_index = perceivable_types.index(detected_type)
-            # Clamp distance to avoid division by zero or negative values
             clamped_dist = max(0, min(closest_dist, whisker_length))
             whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
 
-    # --- Target Vector Calculation ---
     target_pos = pygame.Vector2(target_pos_data)
     relative_vec = target_pos - unit_pos
     relative_vec = relative_vec.rotate(-np.rad2deg(unit_angle))
@@ -93,32 +91,31 @@ def get_unit_inputs(unit_data, world_objects_data, target_pos_data):
     norm_dy = np.clip(relative_vec.y / _tile_map_global.pixel_height, -1, 1)
     target_inputs = np.array([norm_dx, norm_dy])
 
-    # --- Concatenate all inputs ---
     flat_whisker_inputs = whisker_inputs.flatten()
-    other_inputs = np.array([unit_velocity.length() / 2.0, unit_angle / (2 * np.pi)]) # unit.speed is 2.0
-    return np.concatenate((flat_whisker_inputs, other_inputs, target_inputs))
+    other_inputs = np.array([unit_velocity.length() / 2.0, unit_angle / (2 * np.pi)])
+
+    final_inputs = np.concatenate((flat_whisker_inputs, other_inputs, target_inputs))
+    return final_inputs, whisker_debug_info
 
 
-def run_single_unit_step(unit_data_bundle):
+def run_single_unit_step(unit_data, world_objects_data, population_data, target_position_data):
     """
-    The main worker function. It takes a unit's data, calculates its next state,
-    and returns the results.
+    The main worker function, refactored to accept static world data.
     """
-    # 1. Get inputs from the environment
-    inputs = get_unit_inputs(
-        unit_data_bundle['unit'],
-        unit_data_bundle['world_objects'],
-        unit_data_bundle['target_position']
+    inputs, whisker_debug_info = get_unit_inputs(
+        unit_data,
+        world_objects_data,
+        population_data,
+        target_position_data
     )
 
-    # 2. Perform the forward pass of the neural network
-    brain = unit_data_bundle['unit']['brain']
+    brain = unit_data['brain']
     actions = brain.forward(inputs)
 
-    # 3. Return the calculated actions and the unit's ID
     return {
-        "id": unit_data_bundle['unit']['id'],
-        "actions": actions
+        "id": unit_data['id'],
+        "actions": actions,
+        "whisker_debug_info": whisker_debug_info
     }
 
 
@@ -186,30 +183,34 @@ class TrainingSimulation:
         target_pos_data = (self.target.position.x, self.target.position.y)
         population_data = [u.to_dict() for u in self.population]
 
-        tasks = []
-        for unit_dict in population_data:
-            # The 'population_data' is included in each task bundle so that workers can
-            # perceive other units.
-            unit_dict['population_data'] = population_data
-            tasks.append({
-                'unit': unit_dict,
-                'world_objects': world_objects_data,
-                'target_position': target_pos_data
-            })
+        # Create a partial function with the data that is the same for all units.
+        # This is far more efficient as this large data blob is only pickled once.
+        worker_func = partial(run_single_unit_step,
+                              world_objects_data=world_objects_data,
+                              population_data=population_data,
+                              target_position_data=target_pos_data)
 
-        # Use the pool to distribute the work.
-        # If the pool doesn't exist, fall back to a sequential map.
+        tasks = [u.to_dict() for u in self.population]
+
         if self.pool:
-            results = self.pool.map(run_single_unit_step, tasks)
+            results = self.pool.map(worker_func, tasks)
         else:
-            # This ensures the program can still run even if the pool failed to init
             init_worker(self.tile_map)
-            results = [run_single_unit_step(task) for task in tasks]
+            results = [worker_func(task) for task in tasks]
 
         for result in results:
             unit = self.population_map[result['id']]
-            actions = result['actions']
-            unit.update(actions, self.projectiles)
+            unit.update(result['actions'], self.projectiles)
+            # Restore whisker visualization data from the worker
+            # Convert tuples back to Vector2 for pygame drawing
+            unit.whisker_debug_info = [
+                {
+                    'start': pygame.Vector2(info['start']),
+                    'end': pygame.Vector2(info['end']),
+                    'full_end': pygame.Vector2(info['full_end']),
+                    'type': info['type']
+                } for info in result['whisker_debug_info']
+            ]
             unit.position.x = np.clip(unit.position.x, 0, self.world_width)
             unit.position.y = np.clip(unit.position.y, 0, self.world_height)
 

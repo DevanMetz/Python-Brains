@@ -9,7 +9,8 @@ from map import TileMap, Tile
 # --- Constants ---
 WORLD_WIDTH, WORLD_HEIGHT = 800, 600
 FPS = 60
-STEPS_PER_GENERATION = 400
+# This is now a variable, not a constant
+# STEPS_PER_GENERATION = 400
 SPEED_LEVELS = [1, 2, 4, 8, 16, 32]
 TILE_SIZE = 20
 
@@ -43,6 +44,7 @@ def main():
         tile_map=tile_map
     )
     step_counter = 0
+    steps_per_generation = 400 # Now a variable
     best_fitness = 0
     speed_index = 0
     simulation_speed = SPEED_LEVELS[speed_index]
@@ -80,6 +82,18 @@ def main():
         relative_rect=pygame.Rect((180, WORLD_HEIGHT - 60), (150, 40)),
         text='Train Combat', manager=ui_manager)
 
+    # --- Simulation Length Slider ---
+    sim_length_label = pygame_gui.elements.UILabel(
+        relative_rect=pygame.Rect((WORLD_WIDTH - 230, WORLD_HEIGHT - 55), (80, 30)),
+        text='Steps:', manager=ui_manager)
+    sim_length_value_label = pygame_gui.elements.UILabel(
+        relative_rect=pygame.Rect((WORLD_WIDTH - 160, WORLD_HEIGHT - 55), (50, 30)),
+        text=str(steps_per_generation), manager=ui_manager)
+    sim_length_slider = pygame_gui.elements.UIHorizontalSlider(
+        relative_rect=pygame.Rect((WORLD_WIDTH - 230, WORLD_HEIGHT - 30), (200, 20)),
+        start_value=steps_per_generation, value_range=(100, 2000), manager=ui_manager)
+
+
     # --- Main Loop ---
     running = True
     while running:
@@ -111,6 +125,9 @@ def main():
                 elif event.ui_element == design_menu.whisker_length_slider:
                     length = int(event.value)
                     design_menu.whisker_length_value_label.set_text(str(length))
+                elif event.ui_element == sim_length_slider:
+                    steps_per_generation = int(event.value)
+                    sim_length_value_label.set_text(str(steps_per_generation))
 
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
                 if event.ui_element == to_design_menu_button:
@@ -170,6 +187,9 @@ def main():
             back_to_sim_button.hide()
             train_nav_button.hide()
             train_combat_button.hide()
+            sim_length_label.hide()
+            sim_length_slider.hide()
+            sim_length_value_label.hide()
             design_menu.show()
         elif current_state == GameState.SIMULATION:
             design_menu.hide()
@@ -179,9 +199,12 @@ def main():
             to_map_editor_button.show()
             train_nav_button.show()
             train_combat_button.show()
+            sim_length_label.show()
+            sim_length_slider.show()
+            sim_length_value_label.show()
 
             for _ in range(simulation_speed):
-                if step_counter < STEPS_PER_GENERATION:
+                if step_counter < steps_per_generation:
                     trainer.run_generation_step()
                     step_counter += 1
                 else:
@@ -195,6 +218,9 @@ def main():
             to_map_editor_button.hide()
             train_nav_button.hide()
             train_combat_button.hide()
+            sim_length_label.hide()
+            sim_length_slider.hide()
+            sim_length_value_label.hide()
             design_menu.hide()
             back_to_sim_button.show()
 
@@ -210,10 +236,12 @@ def main():
             fitness_text = font.render(f"Best Fitness: {best_fitness:.2f}", True, WHITE)
             mode_text = font.render(f"Mode: {'COMBAT' if trainer.training_mode == TrainingMode.COMBAT else 'NAVIGATE'}", True, WHITE)
             speed_text = font.render(f"Speed: {simulation_speed}x", True, WHITE)
+            fps_text = font.render(f"FPS: {clock.get_fps():.0f}", True, WHITE)
             screen.blit(gen_text, (20, 20))
             screen.blit(fitness_text, (20, 50))
             screen.blit(mode_text, (20, 80))
             screen.blit(speed_text, (20, 110))
+            screen.blit(fps_text, (20, 140))
         elif current_state == GameState.MAP_EDITOR:
             tile_map.draw(screen)
             trainer.target.draw(screen)
