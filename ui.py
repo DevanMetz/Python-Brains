@@ -51,7 +51,6 @@ class DesignMenu:
         self.attack_checkbox = pygame_gui.elements.UICheckBox(
             relative_rect=pygame.Rect((10, 140), (280, 25)),
             text="Enable Attack Action",
-            check_start=False,
             manager=ui_manager,
             container=self.panel
         )
