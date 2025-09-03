@@ -85,17 +85,7 @@ To solve the bottleneck, the simulation loop was re-architected to use Python's 
 
 This change allows the simulation to scale with the number of CPU cores, leading to a dramatic reduction in the time required to train a generation of brains.
 
-### 8.3. GPU Acceleration with CuPy
-While `multiprocessing` effectively utilized multiple CPU cores, the MLP's forward pass, being a series of large matrix multiplications, remained a candidate for further optimization. To leverage the massive parallelism of modern GPUs, the CuPy library was integrated.
-
--   **Targeted Optimization:** The optimization was specifically aimed at the `MLP.forward()` method. The weights and biases of the MLP, however, were kept as standard NumPy arrays.
--   **Compatibility with `multiprocessing`:** A key challenge was that CuPy objects (representing data on the GPU) are not "picklable," meaning they cannot be easily sent between the processes in the multiprocessing pool.
--   **Just-in-Time Data Transfer:** To solve this, a new `MLPCupy` class was created. In its overridden `forward` method, the NumPy inputs, weights, and biases are transferred to the GPU *at the beginning of the call* (`cupy.asarray`). The computation is performed entirely on the GPU, and the final result is transferred back to the CPU *at the end of the call* (`cupy.asnumpy`).
--   **CPU Fallback:** The implementation includes a fallback mechanism. If CuPy is not installed or no compatible GPU is found, the system automatically reverts to the original, NumPy-based calculation, ensuring the application remains functional on all hardware.
-
-This hybrid approach allows the application to benefit from GPU acceleration for the most intensive calculations while maintaining full compatibility with the existing CPU-based parallel processing architecture.
-
-### 8.4. Spatial Partitioning with a Quadtree
+### 8.3. Spatial Partitioning with a Quadtree
 The next major bottleneck identified was in the collision detection logic within `get_unit_inputs`. For each unit, the original implementation performed a raycast check against every other object in the simulation, leading to O(n²) complexity that did not scale well with a larger number of units.
 
 To address this, a Quadtree was implemented to spatially partition the game world.
@@ -104,6 +94,21 @@ To address this, a Quadtree was implemented to spatially partition the game worl
 -   **Optimized Perception:** Before a worker process is tasked with calculating a unit's inputs, the main process now queries the Quadtree for objects that are physically near the unit. Only this small, localized list of objects is passed to the worker, dramatically reducing the number of collision checks required for the unit's "whiskers". This change also significantly reduces the amount of data that needs to be pickled and sent to each process.
 -   **Optimized Projectile Collisions:** The projectile update loop was also modified to use the Quadtree. Instead of checking against all possible targets, projectiles now query the Quadtree to find nearby objects, making the combat simulation more efficient.
 -   **Debug Visualization:** A toggleable debug view was added to render the Quadtree's boundaries, allowing for easy visual verification of its state and behavior during runtime.
+
+### 8.4. GPU Acceleration with OpenCL
+While `multiprocessing` effectively utilized multiple CPU cores, the MLP forward pass and whisker calculations remained candidates for further optimization. To leverage the massive parallelism of modern GPUs, the PyOpenCL library was integrated as a more hardware-agnostic solution than the previous CuPy implementation.
+
+-   **Vectorized Perception:** The whisker-object intersection check was vectorized in `math_utils_opencl.py`. This function computes all whisker-object intersections for a unit in a single, parallel GPU operation, replacing the iterative Python `for` loop.
+-   **Initial MLP Acceleration:** The `MLP.forward()` method was offloaded to the GPU. However, the initial implementation was naive, transferring data to and from the GPU for each layer in the network, creating a new performance bottleneck.
+
+### 8.5. Advanced OpenCL MLP Optimization
+The naive OpenCL implementation of the forward pass was found to be inefficient due to excessive data transfers between the host (CPU) and the device (GPU). A new, highly optimized approach was implemented to resolve this.
+
+-   **Zero-Copy Forward Pass:** The `MLPOpenCL.forward` method was completely re-architected. Instead of transferring intermediate results for each layer back to the CPU, the new implementation uses a single, large, pre-allocated `activations_buffer` that resides permanently on the GPU for the duration of a forward pass.
+-   **Ping-Pong Offset Strategy:** A custom OpenCL kernel, `forward_layer_optimized`, was written. This kernel accepts `input_offset` and `output_offset` parameters. The `forward` method uses these offsets to "ping-pong" between two regions of the `activations_buffer`. The output of one layer (written to one region) becomes the input for the next layer (read from that same region) without ever leaving the GPU.
+-   **Efficient Buffer Caching:** The `_gpu_brain_cache` in the `trainer.py` worker processes was upgraded. When a brain is first encountered, the worker now allocates the persistent `weights`, `biases`, and the shared `activations_buffer` on the GPU. These buffers are reused for all subsequent forward passes of that same brain, minimizing overhead.
+
+This advanced optimization ensures that for a given MLP forward pass, there is only one data transfer from the CPU to the GPU (the initial sensory inputs) and one transfer back (the final action outputs), maximizing the performance gains from GPU acceleration.
 
 ## 9. Architecture V5: Rendering Performance Optimization
 While the previous optimizations focused on the simulation's computational bottlenecks (MLP forward pass and collision detection), the application's frame rate could still suffer with very large populations due to the rendering load. This version introduces an optimization to decouple the simulation rate from the rendering rate.
@@ -114,6 +119,3 @@ While the previous optimizations focused on the simulation's computational bottl
     -   **Population Size:** Allows the user to dynamically change the total number of units in the simulation.
     -   **Drawn Units:** Allows the user to control how many of the fittest units are rendered on screen.
 -   **UI Refactoring:** To accommodate these new controls cleanly, the simulation-related UI elements were refactored from `main.py` into a dedicated `SimulationUI` class in `ui.py`.
-
-### 8.5. Vectorized Perception
-To further optimize the perception logic, the final step of checking a whisker ray against the localized list of objects (provided by the Quadtree) was also vectorized. A new `vectorized_line_circle_intersection` function was implemented in `math_utils.py` using CuPy (with a NumPy fallback). This function computes all whisker-object intersections for a unit in a single, parallel GPU operation, replacing the iterative Python `for` loop and providing another significant performance increase.

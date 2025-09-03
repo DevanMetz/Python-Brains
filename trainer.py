@@ -268,10 +268,22 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data):
 
             # Check if this brain's OpenCL buffers are already cached.
             if brain_id not in _gpu_brain_cache:
-                # If not, create, transfer, and cache the buffers.
+                # If not, create, transfer, and cache all necessary buffers.
                 weights_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=w.astype(np.float32)) for w in brain.weights]
                 biases_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=b.astype(np.float32)) for b in brain.biases]
-                _gpu_brain_cache[brain_id] = {'weights': weights_bufs, 'biases': biases_bufs}
+
+                # The single activations buffer needs to be large enough for the ping-pong offset strategy.
+                max_layer_size = max(brain.layer_sizes)
+                # Size needs to be 2 * max_layer_size to hold input and output for any layer.
+                activations_buf_size = max_layer_size * 2 * np.dtype(np.float32).itemsize
+                activations_buf = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=activations_buf_size)
+
+                _gpu_brain_cache[brain_id] = {
+                    'weights': weights_bufs,
+                    'biases': biases_bufs,
+                    'activations_buf': activations_buf,
+                    'max_layer_size': max_layer_size
+                }
 
             # Run the forward pass using the cached OpenCL buffers.
             cached_buffers = _gpu_brain_cache[brain_id]
@@ -308,6 +320,9 @@ def clear_cache_worker(_):
                 buf.release()
             for buf in brain_data['biases']:
                 buf.release()
+            # Also release the new activations buffer
+            if 'activations_buf' in brain_data:
+                brain_data['activations_buf'].release()
         _gpu_brain_cache.clear()
     return True
 

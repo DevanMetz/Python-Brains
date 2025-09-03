@@ -31,12 +31,15 @@ except Exception as e:
 
 # --- OpenCL Kernel for a single layer's forward pass ---
 # This C-like code will be compiled and run on the GPU.
+# This optimized kernel uses offsets to work with a single, pre-allocated
+# buffer for all layer activations, minimizing buffer creation and data transfers.
 kernel_code = """
-__kernel void forward_layer(
-    __global const float *input_buffer,
+__kernel void forward_layer_optimized(
+    __global float *activations_buffer, // A single buffer for all activations
     __global const float *weights_buffer,
     __global const float *biases_buffer,
-    __global float *output_buffer,
+    const int input_offset,
+    const int output_offset,
     const int input_size,
     const int output_size)
 {
@@ -50,12 +53,14 @@ __kernel void forward_layer(
         // Perform the dot product of the input vector and the i-th column of the weight matrix.
         for (int j = 0; j < input_size; ++j) {
             // Accessing weights in column-major order (standard for NumPy)
-            sum += input_buffer[j] * weights_buffer[j * output_size + i];
+            // Input is read from the shared buffer at a specified offset.
+            sum += activations_buffer[input_offset + j] * weights_buffer[j * output_size + i];
         }
         // Add the bias for this neuron.
         sum += biases_buffer[i];
-        // Apply the tanh activation function and store the result.
-        output_buffer[i] = tanh(sum);
+        // Apply the tanh activation function and store the result in the shared buffer
+        // at a specified offset.
+        activations_buffer[output_offset + i] = tanh(sum);
     }
 }
 """
@@ -65,7 +70,7 @@ forward_layer_kernel = None
 if OPENCL_AVAILABLE:
     try:
         program = cl.Program(context, kernel_code).build()
-        forward_layer_kernel = program.forward_layer
+        forward_layer_kernel = program.forward_layer_optimized
     except cl.Error as e:
         print(f"ERROR: Failed to compile OpenCL kernel: {e}")
         # Disable OpenCL if compilation fails
@@ -76,68 +81,85 @@ class MLPOpenCL(MLP):
     """
     An MLP that uses OpenCL for GPU-accelerated forward passes.
 
+    This implementation is highly optimized to minimize CPU-GPU data transfers.
+    It performs the entire multi-layer forward pass on the GPU by using a
+    single, large, pre-allocated buffer for all layer activations. This avoids
+    the overhead of creating new buffers or copying intermediate results back
+    to the CPU for each layer.
+
     Inherits from the base MLP class to reuse the weight/bias initialization
-    and the genetic algorithm methods (crossover, mutation). The `forward`
-    method is overridden to use the GPU. This class is now picklable as it
-    does not hold any non-picklable OpenCL objects as attributes.
+    and the genetic algorithm methods (crossover, mutation).
     """
     def forward(self, inputs, *, cached_buffers=None):
         """
-        Performs a forward pass using OpenCL, with an option for cached buffers.
+        Performs a highly optimized forward pass using OpenCL.
+
+        This method executes the entire forward pass on the GPU. It requires a
+        `cached_buffers` dictionary containing pre-allocated OpenCL buffers for
+        weights, biases, and a large shared buffer for activations.
 
         Args:
             inputs (np.ndarray): The input vector for the network.
-            cached_buffers (dict, optional): A dictionary containing pre-existing
-                OpenCL buffer objects for weights and biases. If provided, this
-                avoids transferring this data to the GPU on every call.
-                Expected format: {'weights': [buf1, buf2,...], 'biases': [buf1, buf2,...]}
+            cached_buffers (dict): A dictionary containing pre-existing OpenCL
+                buffer objects. This is not optional for this implementation.
+                Expected format: {
+                    'weights': [buf1, buf2,...],
+                    'biases': [buf1, buf2,...],
+                    'activations_buf': single_large_buffer,
+                    'max_layer_size': int
+                }
 
         Returns:
             np.ndarray: The output vector from the network.
         """
-        if not OPENCL_AVAILABLE or not program:
+        if not forward_layer_kernel or not cached_buffers:
+            # Fallback to the slower, CPU-based NumPy implementation if the
+            # OpenCL kernel isn't ready or if cached buffers aren't provided.
             return super().forward(inputs)
 
         try:
-            current_input_np = np.array(inputs, dtype=np.float32).flatten()
-            temp_buffers = []
+            weights_bufs = cached_buffers['weights']
+            biases_bufs = cached_buffers['biases']
+            activations_buf = cached_buffers['activations_buf']
+            max_layer_size = cached_buffers['max_layer_size']
+
+            # 1. Copy initial input data to the start of the activations buffer on the GPU.
+            # This is the only host-to-device transfer for the entire forward pass.
+            # This call is non-blocking; the subsequent kernel launch will wait for it.
+            input_np = np.array(inputs, dtype=np.float32).flatten()
+            cl.enqueue_copy(queue, activations_buf, input_np, is_blocking=False, device_offset=0)
+
+            # 2. Sequentially execute kernels for each layer, staying on the GPU.
+            # We use a "ping-pong" strategy on the offsets within the single activations buffer.
+            input_offset = 0
+            output_offset = max_layer_size
 
             for i in range(len(self.weights)):
                 input_size = self.layer_sizes[i]
                 output_size = self.layer_sizes[i+1]
+                weights_buf = weights_bufs[i]
+                biases_buf = biases_bufs[i]
 
-                # Create buffer for the current layer's input
-                input_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=current_input_np)
-                temp_buffers.append(input_buf)
-
-                # Use cached buffers if available, otherwise create new ones
-                if cached_buffers:
-                    weights_buf = cached_buffers['weights'][i]
-                    biases_buf = cached_buffers['biases'][i]
-                else:
-                    weights_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.weights[i].astype(np.float32))
-                    biases_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=self.biases[i].astype(np.float32))
-                    temp_buffers.extend([weights_buf, biases_buf])
-
-                output_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=output_size * np.dtype(np.float32).itemsize)
-                temp_buffers.append(output_buf)
-
+                # Launch the kernel for the current layer.
                 forward_layer_kernel(
                     queue, (output_size,), None,
-                    input_buf, weights_buf, biases_buf, output_buf,
+                    activations_buf, weights_buf, biases_buf,
+                    np.int32(input_offset), np.int32(output_offset),
                     np.int32(input_size), np.int32(output_size)
                 )
 
-                output_np = np.empty(output_size, dtype=np.float32)
-                cl.enqueue_copy(queue, output_np, output_buf).wait()
-                current_input_np = output_np
+                # Swap offsets for the next layer. The previous output is the new input.
+                input_offset, output_offset = output_offset, input_offset
 
-            return current_input_np.reshape(1, -1)
+            # 3. Copy the final result back from the GPU to the CPU.
+            # The final result is located at the last `input_offset`.
+            # This is the only device-to-host transfer for the entire forward pass.
+            output_size = self.layer_sizes[-1]
+            output_np = np.empty(output_size, dtype=np.float32)
+            cl.enqueue_copy(queue, output_np, activations_buf, device_offset=input_offset).wait()
 
-        except cl.Error as e:
-            print(f"ERROR: An OpenCL error occurred during the forward pass: {e}. Falling back to NumPy.")
+            return output_np.reshape(1, -1)
+
+        except (cl.Error, KeyError) as e:
+            print(f"ERROR: An OpenCL error or a key error occurred during the optimized forward pass: {e}. Falling back to NumPy.")
             return super().forward(inputs)
-        finally:
-            # Ensure all temporarily created buffers are released
-            for buf in temp_buffers:
-                buf.release()
