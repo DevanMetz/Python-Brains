@@ -44,33 +44,36 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
         from math_utils import vectorized_line_circle_intersection
         xp = cp
 
-        # --- Prepare whisker data on GPU ---
+        # --- Prepare whisker data ---
         abs_angles = unit_angle + whisker_angles
-        abs_angles_gpu = xp.asarray(abs_angles)
-        start_points_gpu = xp.asarray(unit_pos.xy).reshape(1, 2)
 
-        whisker_end_vectors = xp.stack([
-            xp.cos(abs_angles_gpu) * whisker_length,
-            xp.sin(abs_angles_gpu) * whisker_length
-        ], axis=1)
-        end_points_gpu = start_points_gpu + whisker_end_vectors
-
-        # --- Prepare object data on GPU ---
+        # --- Vectorized whisker-object intersection ---
         if local_objects_data:
+            start_points_gpu = xp.asarray(unit_pos.xy).reshape(1, 2)
+            whisker_end_vectors = xp.stack([
+                xp.cos(xp.asarray(abs_angles)) * whisker_length,
+                xp.sin(xp.asarray(abs_angles)) * whisker_length
+            ], axis=1)
+            end_points_gpu = start_points_gpu + whisker_end_vectors
+
             centers_gpu = xp.asarray([d['position'] for d in local_objects_data])
             radii_gpu = xp.asarray([d['size'] for d in local_objects_data])
+
             obj_distances, obj_indices = vectorized_line_circle_intersection(
                 start_points_gpu, end_points_gpu, centers_gpu, radii_gpu, xp)
         else:
             obj_distances = xp.full(num_whiskers, xp.inf)
             obj_indices = xp.full(num_whiskers, -1, dtype=xp.int32)
 
-        # --- Wall detection (still iterative for now) ---
+        # --- Wall detection (iterative) ---
         wall_distances = np.full(num_whiskers, np.inf)
         if "wall" in perceivable_types:
-            for i, angle in enumerate(abs_angles):
+            # This loop is structured to be identical to the fallback logic
+            # to prevent subtle bugs.
+            for i, whisker_angle in enumerate(whisker_angles):
+                abs_angle = unit_angle + whisker_angle
                 start_point = unit_pos
-                end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(angle))
+                end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle))
                 dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
                 steps = int(max(abs(dx), abs(dy)))
                 if steps > 0:
@@ -96,7 +99,7 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
             idx = final_indices[i]
             detected_type = None
 
-            abs_angle_rad = abs_angles[i]
+            abs_angle_rad = unit_angle + whisker_angles[i]
             start_point = unit_pos
             full_end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
             intersect_point = full_end_point
