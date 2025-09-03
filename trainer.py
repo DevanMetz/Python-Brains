@@ -153,16 +153,31 @@ class TrainingSimulation:
 
     def save_fittest_brain(self, filepath_prefix="saved_brains/brain"):
         """
-        Saves the architecture and weights of the fittest brain in the population.
+        Saves the architecture and weights of the fittest brain in the population,
+        using the correct fitness function for the current training mode.
         """
-        # Find the fittest unit
+        # Find the fittest unit by calculating fitness based on the current mode
         fitness_scores = []
-        for unit in self.population:
-            distance = unit.position.distance_to(self.target.position)
-            fitness = (self.world_width - distance) ** 2
-            fitness_scores.append((unit, fitness))
+        if self.training_mode == TrainingMode.NAVIGATE:
+            for unit in self.population:
+                distance = unit.position.distance_to(self.target.position)
+                fitness = (self.world_width - distance) ** 2
+                fitness_scores.append((unit, fitness))
+        elif self.training_mode == TrainingMode.COMBAT:
+            for unit in self.population:
+                distance = unit.position.distance_to(self.enemy.position)
+                fitness = unit.damage_dealt * 100 + (self.world_width - distance)
+                fitness_scores.append((unit, fitness))
+
+        if not fitness_scores:
+            print("Warning: Could not determine fittest brain. No units or fitness scores.")
+            return
+
         fitness_scores.sort(key=lambda x: x[1], reverse=True)
         fittest_unit = fitness_scores[0][0]
+
+        # Ensure the save directory exists
+        os.makedirs(os.path.dirname(filepath_prefix), exist_ok=True)
 
         # Save architecture to JSON
         arch_data = {

@@ -26,13 +26,13 @@ This milestone focused on creating the core gameplay loop: empowering the player
 
 ---
 
-## ➡️ Milestone 3: Advanced AI - Perception & Combat *(Proposed Next Step)*
+## ✅ Milestone 3: Advanced AI - Perception & Combat *(Complete)*
 
-This milestone will introduce the first elements of conflict and more complex AI behaviors.
+This milestone introduced the first elements of conflict and more complex AI behaviors.
 
--   **[ ] Implement "Attack" Action:** Add an "attack" output to the MLP and introduce a basic, damageable enemy target.
--   **[ ] Typed Perception (Smarter Whiskers):** Enhance the sensory system so whiskers can report the *type* of object detected (e.g., Wall, Enemy, Friendly), not just the distance. This allows for more specialized AI.
--   **[ ] Combat Training Scenario:** Create a new training environment where the fitness function rewards combat effectiveness (e.g., damage dealt to the enemy).
+-   **[✓] Implement "Attack" Action:** Added an "attack" output to the MLP and introduced a basic, damageable enemy target.
+-   **[✓] Typed Perception (Smarter Whiskers):** Enhanced the sensory system so whiskers can report the *type* of object detected (e.g., Wall, Enemy, Friendly), not just the distance. This allows for more specialized AI.
+-   **[✓] Combat Training Scenario:** Created a new training environment where the fitness function rewards combat effectiveness (e.g., damage dealt to the enemy).
 
 ---
 

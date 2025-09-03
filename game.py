@@ -86,7 +86,7 @@ class Unit:
         """Creates and returns a new projectile if cooldown is over."""
         if self.attack_cooldown <= 0:
             self.attack_cooldown = self.max_cooldown
-            return Projectile(self.position.x, self.position.y, self.angle)
+            return Projectile(self.position.x, self.position.y, self.angle, self)
         return None
 
     def update(self, actions, world_projectiles):

@@ -13,49 +13,55 @@ The project is a Real-Time Strategy (RTS) game where the player does not directl
 
 ## 3. Unit AI and Perception
 -   **Brains:** The core of each unit's AI is an MLP.
--   **Perception:** Units perceive the world through a "whisker" system.
+-   **Typed Perception:** Units perceive the world through a "typed whisker" system.
     -   Whiskers are rays cast out from the unit in a forward-facing arc.
-    -   They can detect different types of objects (enemies, resources, walls, friendlies).
-    -   The data from these whiskers (e.g., distance to a detected object) forms the primary input to the unit's MLP.
+    -   They can detect different *types* of objects (e.g., "wall", "enemy", "unit"). The player can configure which types a brain can "see".
+    -   For each whisker, a separate input neuron is created for each perceivable object type.
+    -   The value of the input is `1.0 - (distance / max_whisker_length)`, allowing the AI to know both the type and proximity of a detected object.
 -   **Inputs/Outputs:**
-    -   **Inputs:** Whisker data, internal state (e.g., health, position).
-    -   **Outputs:** Actions (e.g., move direction, attack, collect resources).
+    -   **Inputs:** The primary inputs come from the typed whisker system. The total number of whisker inputs is `num_whiskers * num_perceivable_types`. Additionally, there are 2 inputs for the unit's internal state: current velocity and current angle.
+    -   **Outputs:** The MLP has 2 or 3 outputs, activated by `tanh`:
+        1.  `Turn`: Controls the unit's rotation.
+        2.  `Move`: Controls the unit's forward acceleration.
+        3.  `Attack` (Optional): If enabled in the design menu, this output controls when the unit fires a projectile.
 
 ## 4. Technology Stack
 -   **Language:** Python
 -   **Graphics/Game Loop:** Pygame
+-   **UI:** `pygame-gui`
 -   **Numerical Computation:** NumPy
 
-## 5. Current Milestone: "Hello, World!" of AI
-The initial goal is to create a minimal viable product that demonstrates the core training loop.
--   **Objective:** Train a single unit to move towards a designated target on the map.
--   **Components:**
-    -   A single `Unit` instance.
-    -   A `Target` object.
-    -   A `TrainingSimulation` that uses a genetic algorithm to evolve the unit's MLP brain.
-    -   A visual representation of the simulation running.
+## 5. Architecture V1: Foundational Prototype
+The initial goal was to create a minimal viable product demonstrating the core training loop for navigation.
+-   **Objective:** Train a single unit to move towards a designated target.
+-   **Components:** A `Unit`, a `Target`, and a `TrainingSimulation` using a genetic algorithm.
 
 ## 6. Architecture V2: The AI Design Toolkit
-
-The second major iteration introduces the core gameplay loop: player-driven AI design.
+The second major iteration introduced the core gameplay loop: player-driven AI design.
 
 ### 6.1. Game State Management
-The application is managed by a state machine in `main.py` that can switch between two primary states:
--   `GameState.SIMULATION`: The view where the training simulation runs.
--   `GameState.DESIGN_MENU`: The UI view for creating and configuring AI brains.
+The application is managed by a state machine in `main.py` that switches between `GameState.SIMULATION` and `GameState.DESIGN_MENU`.
 
-### 6.2. UI (`pygame-gui`)
-The project uses the `pygame-gui` library to handle UI elements. A `DesignMenu` class in `ui.py` encapsulates the elements and logic for the design menu.
+### 6.2. UI and Dynamic AI Configuration
+The `DesignMenu` (`ui.py`) allows the player to configure:
+-   **MLP Architecture**: The number and size of hidden layers.
+-   **Sensory Inputs**: The number of whiskers and the object types they can perceive. This dynamically changes the size of the MLP's input layer.
+-   **Outputs**: Whether to enable the "Attack" action, which changes the size of the output layer.
 
-### 6.3. AI Design Features
-The AI Design Menu allows the player to configure:
--   **MLP Architecture**: The player can define the number and size of hidden layers for the neural network.
--   **Sensory Inputs**: The player can choose the number of "whiskers" the unit uses to see, which dynamically changes the size of the MLP's input layer.
+### 6.3. Save/Load System
+A system for persisting AI brains was implemented.
+-   **Location**: `saved_brains/`
+-   **Format**: A `.json` file for architecture metadata (layer sizes, whisker config) and a `.npz` file for weights and biases.
 
-### 6.4. Save/Load System
-A system for persisting AI brains has been implemented.
--   **Location**: Brains are saved in the `saved_brains/` directory.
--   **Format**:
-    -   The brain's architecture (layer sizes, whisker count) is saved to a `.json` file.
-    -   The trained weights and biases of the MLP are saved to a `.npz` file using NumPy.
--   **Functionality**: The player can save the best-performing brain from a training session and load it back later to continue training or use it.
+## 7. Architecture V3: Combat & Advanced Training
+The third iteration introduced combat mechanics and more advanced training options.
+
+### 7.1. Combat System
+-   **Projectiles:** Units with an enabled attack output can fire `Projectile` objects. These are simple, straight-moving entities with a limited lifespan.
+-   **Enemies:** A stationary `Enemy` class was introduced. It has health and can be damaged by projectiles.
+-   **Damage Tracking:** Units track the total damage they have dealt, which is used for fitness calculation.
+
+### 7.2. Dual Training Modes
+The `TrainingSimulation` now supports two distinct modes, selectable in the UI:
+-   **`TrainingMode.NAVIGATE`**: The original mode. Fitness is calculated based on the unit's proximity to a `Target` object.
+-   **`TrainingMode.COMBAT`**: A new mode. Fitness is calculated based on the damage dealt to the `Enemy`, with a small bonus for being close to the enemy. This allows for the evolution of aggressive, combat-oriented brains.
