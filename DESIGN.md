@@ -34,3 +34,28 @@ The initial goal is to create a minimal viable product that demonstrates the cor
     -   A `Target` object.
     -   A `TrainingSimulation` that uses a genetic algorithm to evolve the unit's MLP brain.
     -   A visual representation of the simulation running.
+
+## 6. Architecture V2: The AI Design Toolkit
+
+The second major iteration introduces the core gameplay loop: player-driven AI design.
+
+### 6.1. Game State Management
+The application is managed by a state machine in `main.py` that can switch between two primary states:
+-   `GameState.SIMULATION`: The view where the training simulation runs.
+-   `GameState.DESIGN_MENU`: The UI view for creating and configuring AI brains.
+
+### 6.2. UI (`pygame-gui`)
+The project uses the `pygame-gui` library to handle UI elements. A `DesignMenu` class in `ui.py` encapsulates the elements and logic for the design menu.
+
+### 6.3. AI Design Features
+The AI Design Menu allows the player to configure:
+-   **MLP Architecture**: The player can define the number and size of hidden layers for the neural network.
+-   **Sensory Inputs**: The player can choose the number of "whiskers" the unit uses to see, which dynamically changes the size of the MLP's input layer.
+
+### 6.4. Save/Load System
+A system for persisting AI brains has been implemented.
+-   **Location**: Brains are saved in the `saved_brains/` directory.
+-   **Format**:
+    -   The brain's architecture (layer sizes, whisker count) is saved to a `.json` file.
+    -   The trained weights and biases of the MLP are saved to a `.npz` file using NumPy.
+-   **Functionality**: The player can save the best-performing brain from a training session and load it back later to continue training or use it.

@@ -6,7 +6,7 @@ class Unit:
     """
     Represents a single unit in the game, controlled by an MLP brain.
     """
-    def __init__(self, x, y, brain=None):
+    def __init__(self, x, y, brain=None, num_whiskers=7):
         self.position = pygame.Vector2(x, y)
         self.angle = np.random.uniform(0, 2 * np.pi) # Facing direction in radians
         self.velocity = pygame.Vector2(0, 0)
@@ -15,7 +15,11 @@ class Unit:
         self.speed = 2.0
 
         self.brain = brain
-        self.whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, 7) # 7 whiskers in a 180-degree cone
+        self.num_whiskers = num_whiskers
+        if self.num_whiskers > 1:
+            self.whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, self.num_whiskers)
+        else:
+            self.whisker_angles = np.array([0]) # Single whisker facing forward
         self.whisker_length = 150
 
     def get_inputs(self, world_objects):

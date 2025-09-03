@@ -1,4 +1,6 @@
 import numpy as np
+import json
+import os
 from game import Unit, Target, Wall
 from mlp import MLP
 
@@ -6,15 +8,16 @@ class TrainingSimulation:
     """
     Manages the genetic algorithm training process.
     """
-    def __init__(self, population_size=50, world_size=(800, 600)):
+    def __init__(self, population_size=50, world_size=(800, 600), num_whiskers=7):
         self.population_size = population_size
         self.world_width, self.world_height = world_size
         self.generation = 0
+        self.num_whiskers = num_whiskers
 
         # Define the MLP architecture
-        # Inputs: 7 whiskers + velocity + angle = 9
-        # Outputs: turn + move = 2
-        self.mlp_architecture = [9, 16, 2]
+        # The number of inputs depends on the number of whiskers
+        num_inputs = self.num_whiskers + 2 # whiskers + velocity + angle
+        self.mlp_architecture = [num_inputs, 16, 2]
 
         # Create world objects
         self.target = Target(self.world_width - 50, self.world_height / 2)
@@ -32,7 +35,9 @@ class TrainingSimulation:
         population = []
         for _ in range(self.population_size):
             brain = MLP(self.mlp_architecture)
-            unit = Unit(x=50, y=self.world_height / 2, brain=brain)
+            unit = Unit(
+                x=50, y=self.world_height / 2, brain=brain, num_whiskers=self.num_whiskers
+            )
             population.append(unit)
         return population
 
@@ -101,3 +106,77 @@ class TrainingSimulation:
 
         # Return best fitness for logging
         return fitness_scores[0][1]
+
+    def rebuild_with_new_architecture(self, new_arch, num_whiskers):
+        """
+        Re-initializes the simulation with a new MLP architecture and I/O config.
+        """
+        print(f"Creating new population with architecture: {new_arch} and {num_whiskers} whiskers.")
+        self.mlp_architecture = new_arch
+        self.num_whiskers = num_whiskers
+        self.population = self._create_initial_population()
+        self.generation = 0
+
+    def save_fittest_brain(self, filepath_prefix="saved_brains/brain"):
+        """
+        Saves the architecture and weights of the fittest brain in the population.
+        """
+        # Find the fittest unit
+        fitness_scores = []
+        for unit in self.population:
+            distance = unit.position.distance_to(self.target.position)
+            fitness = (self.world_width - distance) ** 2
+            fitness_scores.append((unit, fitness))
+        fitness_scores.sort(key=lambda x: x[1], reverse=True)
+        fittest_unit = fitness_scores[0][0]
+
+        # Save architecture to JSON
+        arch_data = {
+            "layer_sizes": fittest_unit.brain.layer_sizes,
+            "num_whiskers": fittest_unit.num_whiskers
+        }
+        json_path = f"{filepath_prefix}_arch.json"
+        with open(json_path, 'w') as f:
+            json.dump(arch_data, f, indent=4)
+
+        # Save weights and biases to NPZ
+        weights_path = f"{filepath_prefix}_weights.npz"
+        np.savez(weights_path, *fittest_unit.brain.weights, *fittest_unit.brain.biases)
+
+        print(f"Saved fittest brain to {json_path} and {weights_path}")
+
+    def load_brain_from_file(self, filepath_prefix="saved_brains/brain"):
+        """
+        Loads a brain from files and rebuilds the population with it.
+        """
+        json_path = f"{filepath_prefix}_arch.json"
+        weights_path = f"{filepath_prefix}_weights.npz"
+
+        if not os.path.exists(json_path) or not os.path.exists(weights_path):
+            print(f"Error: Brain files not found at {filepath_prefix}")
+            return
+
+        # Load architecture
+        with open(json_path, 'r') as f:
+            arch_data = json.load(f)
+
+        layer_sizes = arch_data["layer_sizes"]
+        num_whiskers = arch_data["num_whiskers"]
+
+        # Create a new brain and load weights
+        loaded_brain = MLP(layer_sizes)
+        with np.load(weights_path) as data:
+            num_weight_matrices = len(loaded_brain.weights)
+
+            # First N files are weights, the rest are biases
+            for i in range(num_weight_matrices):
+                loaded_brain.weights[i] = data[f'arr_{i}']
+            for i in range(len(loaded_brain.biases)):
+                loaded_brain.biases[i] = data[f'arr_{i + num_weight_matrices}']
+
+        # Rebuild the population with clones of the loaded brain
+        self.rebuild_with_new_architecture(layer_sizes, num_whiskers)
+        for unit in self.population:
+            unit.brain = loaded_brain # Assign the loaded brain to all units
+
+        print(f"Loaded brain from {filepath_prefix} and rebuilt population.")
