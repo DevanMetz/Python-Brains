@@ -168,8 +168,9 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
 
         except Exception as e:
             print(f"Warning: OpenCL-based perception failed with error: {e}. Falling back to CPU.")
-            # Force a recalculation on CPU by ensuring the next check fails.
-            OPENCL_AVAILABLE = False
+            # This will cause the next check to fail and use the CPU path for this unit.
+            # We do NOT assign to OPENCL_AVAILABLE here to avoid the UnboundLocalError.
+            pass
 
     if not OPENCL_AVAILABLE:
         # --- Fallback to original iterative method ---
