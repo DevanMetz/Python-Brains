@@ -55,8 +55,10 @@ def init_worker(tile_map):
 
     # Pre-upload the tile map to the GPU for this worker
     if OPENCL_AVAILABLE:
-        # Flatten the 2D tile map into a 1D array
-        map_data = _tile_map_global.tiles.flatten().astype(np.int32)
+        # The grid is (width, height), but we need to send it to the kernel
+        # in row-major order (height, width) to match the indexing logic.
+        # So we transpose it before flattening.
+        map_data = _tile_map_global.grid.T.flatten().astype(np.int32)
         # Create a read-only buffer on the GPU
         _tile_map_buf_global = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=map_data)
 
