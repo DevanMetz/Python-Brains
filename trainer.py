@@ -7,6 +7,7 @@ from multiprocessing import Pool, cpu_count
 from game import Unit, Target, Wall, Enemy, line_circle_intersection
 from mlp_cupy import MLPCupy as MLP
 from map import Tile
+from quadtree import QuadTree, Rectangle
 
 # --- Worker Function for Multiprocessing ---
 
@@ -21,9 +22,9 @@ def init_worker(tile_map):
     _tile_map_global = tile_map
 
 
-def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_data):
+def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     """
-    A standalone version of the Unit.get_inputs method, modified to return debug info.
+    A standalone version of the Unit.get_inputs method, optimized to use local object data.
     """
     unit_pos = pygame.Vector2(unit_data['position'])
     unit_angle = unit_data['angle']
@@ -36,7 +37,8 @@ def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_d
     whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
     whisker_debug_info = []
 
-    all_objects_data = world_objects_data + [d for d in population_data if d['id'] != unit_data['id']]
+    # This function now receives a pre-filtered list of local objects from the Quadtree
+    all_objects_data = local_objects_data
 
     for i, whisker_angle in enumerate(whisker_angles):
         abs_angle = unit_angle + whisker_angle
@@ -98,14 +100,13 @@ def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_d
     return final_inputs, whisker_debug_info
 
 
-def run_single_unit_step(unit_data, world_objects_data, population_data, target_position_data):
+def run_single_unit_step(unit_data, local_objects_data, target_position_data):
     """
-    The main worker function, refactored to accept static world data.
+    The main worker function, refactored to accept local world data from the Quadtree.
     """
     inputs, whisker_debug_info = get_unit_inputs(
         unit_data,
-        world_objects_data,
-        population_data,
+        local_objects_data,
         target_position_data
     )
 
@@ -117,6 +118,15 @@ def run_single_unit_step(unit_data, world_objects_data, population_data, target_
         "actions": actions,
         "whisker_debug_info": whisker_debug_info
     }
+
+
+def run_single_unit_step_wrapper(task_data):
+    """Unpacks a dictionary and calls the main worker function."""
+    return run_single_unit_step(
+        task_data['unit_data'],
+        task_data['local_objects_data'],
+        task_data['target_position_data']
+    )
 
 
 class TrainingMode:
@@ -161,6 +171,10 @@ class TrainingSimulation:
         self.population = self._create_initial_population()
         self.population_map = {unit.id: unit for unit in self.population}
 
+        # Create the Quadtree for spatial partitioning
+        qt_boundary = Rectangle(self.world_width / 2, self.world_height / 2, self.world_width, self.world_height)
+        self.quadtree = QuadTree(qt_boundary, capacity=4)
+
     def _create_initial_population(self):
         population = []
         for i in range(self.population_size):
@@ -177,32 +191,45 @@ class TrainingSimulation:
 
     def run_generation_step(self):
         """
-        Runs a single step of the simulation for the entire population using a multiprocessing pool.
+        Runs a single step of the simulation, using the Quadtree for collision optimization.
         """
-        world_objects_data = [obj.to_dict() for obj in self.world_objects]
+        # 1. Populate the Quadtree
+        self.quadtree.clear()
+        all_objects = self.world_objects + self.population
+        for obj in all_objects:
+            self.quadtree.insert(obj)
+
+        # 2. Create tasks for each unit with localized data from the Quadtree
         target_pos_data = (self.target.position.x, self.target.position.y)
-        population_data = [u.to_dict() for u in self.population]
+        tasks = []
+        for unit in self.population:
+            # Query for objects in a wide area around the unit
+            query_radius = unit.whisker_length + unit.size
+            query_area = Rectangle(unit.position.x, unit.position.y, query_radius * 2, query_radius * 2)
+            local_objects = self.quadtree.query(query_area)
 
-        # Create a partial function with the data that is the same for all units.
-        # This is far more efficient as this large data blob is only pickled once.
-        worker_func = partial(run_single_unit_step,
-                              world_objects_data=world_objects_data,
-                              population_data=population_data,
-                              target_position_data=target_pos_data)
+            # Serialize the local objects, excluding the unit itself
+            local_objects_data = [obj.to_dict() for obj in local_objects if obj.id != unit.id]
 
-        tasks = [u.to_dict() for u in self.population]
+            tasks.append({
+                'unit_data': unit.to_dict(),
+                'local_objects_data': local_objects_data,
+                'target_position_data': target_pos_data
+            })
 
+        # 3. Run the simulation step in parallel
         if self.pool:
-            results = self.pool.map(worker_func, tasks)
+            results = self.pool.map(run_single_unit_step_wrapper, tasks)
         else:
+            # Single-threaded fallback
             init_worker(self.tile_map)
-            results = [worker_func(task) for task in tasks]
+            results = [run_single_unit_step_wrapper(task) for task in tasks]
 
+        # 4. Apply results to the units
         for result in results:
             unit = self.population_map[result['id']]
             unit.update(result['actions'], self.projectiles)
             # Restore whisker visualization data from the worker
-            # Convert tuples back to Vector2 for pygame drawing
             unit.whisker_debug_info = [
                 {
                     'start': pygame.Vector2(info['start']),
@@ -214,23 +241,30 @@ class TrainingSimulation:
             unit.position.x = np.clip(unit.position.x, 0, self.world_width)
             unit.position.y = np.clip(unit.position.y, 0, self.world_height)
 
-        # Update and check projectiles
+        # 5. Update projectiles using the Quadtree
         for proj in self.projectiles[:]: # Iterate over a copy
             proj.update()
             if proj.lifespan <= 0:
                 self.projectiles.remove(proj)
                 continue
 
-            # Check for collision with enemy
-            if proj.position.distance_to(self.enemy.position) < self.enemy.size:
-                damage = 10
-                self.enemy.health -= damage
-                proj.owner.damage_dealt += damage
-                self.projectiles.remove(proj)
-                if self.enemy.health <= 0:
-                    print("Enemy defeated!")
-                    # For now, just reset its health for the next generation
-                    self.enemy.health = 100
+            # Query for nearby objects to check for collisions
+            query_range = proj.get_bounding_box()
+            nearby_objects = self.quadtree.query(query_range)
+
+            for obj in nearby_objects:
+                # Only check for collisions with enemies
+                if isinstance(obj, Enemy):
+                    if proj.position.distance_to(obj.position) < obj.size:
+                        damage = 10
+                        obj.health -= damage
+                        proj.owner.damage_dealt += damage
+                        self.projectiles.remove(proj)
+                        if obj.health <= 0:
+                            print("Enemy defeated!")
+                            # For now, just reset its health
+                            obj.health = 100
+                        break # Projectile is gone, stop checking this projectile
 
     def evolve_population(self, elitism_frac=0.1, mutation_rate=0.05):
         """

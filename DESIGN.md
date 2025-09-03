@@ -94,3 +94,13 @@ While `multiprocessing` effectively utilized multiple CPU cores, the MLP's forwa
 -   **CPU Fallback:** The implementation includes a fallback mechanism. If CuPy is not installed or no compatible GPU is found, the system automatically reverts to the original, NumPy-based calculation, ensuring the application remains functional on all hardware.
 
 This hybrid approach allows the application to benefit from GPU acceleration for the most intensive calculations while maintaining full compatibility with the existing CPU-based parallel processing architecture.
+
+### 8.4. Spatial Partitioning with a Quadtree
+The next major bottleneck identified was in the collision detection logic within `get_unit_inputs`. For each unit, the original implementation performed a raycast check against every other object in the simulation, leading to O(n²) complexity that did not scale well with a larger number of units.
+
+To address this, a Quadtree was implemented to spatially partition the game world.
+
+-   **Implementation:** A `QuadTree` class was built from scratch in `quadtree.py`. It recursively subdivides the world into four quadrants, storing objects in its leaf nodes.
+-   **Optimized Perception:** Before a worker process is tasked with calculating a unit's inputs, the main process now queries the Quadtree for objects that are physically near the unit. Only this small, localized list of objects is passed to the worker, dramatically reducing the number of collision checks required for the unit's "whiskers". This change also significantly reduces the amount of data that needs to be pickled and sent to each process.
+-   **Optimized Projectile Collisions:** The projectile update loop was also modified to use the Quadtree. Instead of checking against all possible targets, projectiles now query the Quadtree to find nearby objects, making the combat simulation more efficient.
+-   **Debug Visualization:** A toggleable debug view was added to render the Quadtree's boundaries, allowing for easy visual verification of its state and behavior during runtime.

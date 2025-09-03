@@ -96,6 +96,7 @@ def main():
 
     # --- Main Loop ---
     running = True
+    draw_quadtree = False
     while running:
         time_delta = clock.tick(FPS) / 1000.0
 
@@ -111,6 +112,8 @@ def main():
                 elif event.key == pygame.K_DOWN:
                     speed_index = max(speed_index - 1, 0)
                     simulation_speed = SPEED_LEVELS[speed_index]
+                elif event.key == pygame.K_q:
+                    draw_quadtree = not draw_quadtree
 
             if current_state == GameState.MAP_EDITOR:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 2: # Middle mouse
@@ -231,6 +234,10 @@ def main():
             for obj in trainer.world_objects: obj.draw(screen)
             for unit in trainer.population: unit.draw(screen)
             for proj in trainer.projectiles: proj.draw(screen)
+
+            # Draw the quadtree for debugging
+            if draw_quadtree and hasattr(trainer, 'quadtree'):
+                trainer.quadtree.draw(screen)
 
             gen_text = font.render(f"Generation: {trainer.generation}", True, WHITE)
             fitness_text = font.render(f"Best Fitness: {best_fitness:.2f}", True, WHITE)

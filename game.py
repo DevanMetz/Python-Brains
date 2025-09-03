@@ -1,6 +1,7 @@
 import numpy as np
 import pygame
 from mlp import MLP
+from quadtree import Rectangle
 
 from map import Tile
 
@@ -52,6 +53,10 @@ class Unit:
             "whisker_length": self.whisker_length,
             "perceivable_types": self.perceivable_types,
         }
+
+    def get_bounding_box(self):
+        """Returns a Rectangle representing the unit's bounding box."""
+        return Rectangle(self.position.x, self.position.y, self.size * 2, self.size * 2)
 
     def get_inputs(self, world_objects, target):
         """
@@ -236,6 +241,10 @@ class Target:
             "type": self.type,
         }
 
+    def get_bounding_box(self):
+        """Returns a Rectangle representing the target's bounding box."""
+        return Rectangle(self.position.x, self.position.y, self.size * 2, self.size * 2)
+
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
 
@@ -258,6 +267,10 @@ class Enemy:
             "health": self.health,
         }
 
+    def get_bounding_box(self):
+        """Returns a Rectangle representing the enemy's bounding box."""
+        return Rectangle(self.position.x, self.position.y, self.size * 2, self.size * 2)
+
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
         # Draw health bar
@@ -277,6 +290,10 @@ class Projectile:
         self.color = (255, 255, 0) # Yellow
         self.lifespan = 150 # Frames
         self.owner = owner
+
+    def get_bounding_box(self):
+        """Returns a Rectangle representing the projectile's bounding box."""
+        return Rectangle(self.position.x, self.position.y, self.size * 2, self.size * 2)
 
     def update(self):
         self.position += self.velocity
