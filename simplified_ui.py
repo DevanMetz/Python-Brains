@@ -57,6 +57,16 @@ class SimplifiedUI:
             manager=manager, container=self.controls_panel)
         self.mlp_arch_input.set_text("16")
         y_pos += 40
+        self.save_map_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 20, 30)),
+            text='Save Map', manager=manager, container=self.controls_panel
+        )
+        y_pos += 40
+        self.load_map_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 20, 30)),
+            text='Load Map', manager=manager, container=self.controls_panel
+        )
+        y_pos += 40
         self.apply_button = pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 20, 30)),
             text='Apply & Restart', manager=manager, container=self.controls_panel)
