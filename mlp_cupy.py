@@ -19,46 +19,49 @@ class MLPCupy(MLP):
     pickled by the multiprocessing module.
     """
 
-    def forward(self, inputs):
+    def forward(self, inputs, *, _weights_gpu=None, _biases_gpu=None):
         """
-        Performs a forward pass through the network, using the GPU if possible.
+        Performs a forward pass, using the GPU if possible.
+
+        This method is optimized to accept pre-cached GPU arrays for weights
+        and biases, avoiding redundant data transfers.
 
         Args:
             inputs (np.ndarray): The input vector for the network.
+            _weights_gpu (list, optional): A list of CuPy arrays for the weights.
+                If provided, these will be used directly. Defaults to None.
+            _biases_gpu (list, optional): A list of CuPy arrays for the biases.
+                If provided, these will be used directly. Defaults to None.
 
         Returns:
-            np.ndarray: The output vector from the network, as a NumPy array.
+            np.ndarray: The output vector, as a NumPy array.
         """
         if not CUPY_AVAILABLE:
-            # Fallback to the parent's (NumPy-based) forward method
             return super().forward(inputs)
 
         try:
             # --- GPU-accelerated forward pass ---
-
-            # 1. Ensure input is a NumPy array and has the correct dimensions
             if not isinstance(inputs, np.ndarray):
                 inputs = np.array(inputs)
             if inputs.ndim == 1:
                 inputs = inputs.reshape(1, -1)
 
-            # 2. Move data to the GPU
+            # Move inputs to GPU (this is always necessary)
             inputs_gpu = cp.asarray(inputs)
-            weights_gpu = [cp.asarray(w) for w in self.weights]
-            biases_gpu = [cp.asarray(b) for b in self.biases]
 
-            # 3. Perform calculations on the GPU
+            # Use cached GPU parameters if provided, otherwise transfer them
+            weights_gpu = _weights_gpu if _weights_gpu else [cp.asarray(w) for w in self.weights]
+            biases_gpu = _biases_gpu if _biases_gpu else [cp.asarray(b) for b in self.biases]
+
+            # Perform calculations on the GPU
             current_layer_output_gpu = inputs_gpu
             for i in range(len(weights_gpu)):
                 z_gpu = cp.dot(current_layer_output_gpu, weights_gpu[i]) + biases_gpu[i]
                 current_layer_output_gpu = cp.tanh(z_gpu)
 
-            # 4. Move the final result back to the CPU
-            output_cpu = cp.asnumpy(current_layer_output_gpu)
-
-            return output_cpu
+            # Move the final result back to the CPU
+            return cp.asnumpy(current_layer_output_gpu)
 
         except Exception as e:
             print(f"Warning: CuPy forward pass failed with error: {e}. Falling back to NumPy.")
-            # Fallback to the parent's (NumPy-based) forward method in case of any CuPy error
             return super().forward(inputs)
