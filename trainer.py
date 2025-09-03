@@ -132,6 +132,27 @@ def _process_perception_results(unit_data, whisker_results, circle_object_types)
     Helper to process raw whisker results for a single unit.
     This converts distances and indices into the whisker_input vector and debug info.
     """
+    unit_id = unit_data['id']
+
+    # --- Start of Debugging Code ---
+    # Only print debug info for unit 0 to avoid spamming the console
+    if unit_id == 0:
+        distances, indices = whisker_results
+        print(f"--- DEBUG Unit 0 Perception ---")
+        for i in range(len(distances)):
+            dist = distances[i]
+            idx = indices[i]
+            if dist != float('inf'):
+                # Check index bounds to prevent crash on invalid index
+                if idx >= 0 and idx < len(circle_object_types):
+                    detected_type = circle_object_types[idx]
+                elif idx == -2:
+                    detected_type = "wall"
+                else:
+                    detected_type = "UNKNOWN"
+                print(f"  Whisker {i}: Hit Type='{detected_type}', Index={idx}, Dist={dist:.2f}")
+    # --- End of Debugging Code ---
+
     unit_pos = pygame.Vector2(unit_data['position'])
     unit_angle = unit_data['angle']
     num_whiskers = unit_data['num_whiskers']
