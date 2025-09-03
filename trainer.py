@@ -163,9 +163,12 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
 
         except Exception as e:
             print(f"Warning: GPU-based perception failed with error: {e}. Falling back to CPU.")
-            # If GPU path fails for any reason, force a recalculation on CPU
-            CUPY_AVAILABLE = False
+            # If GPU path fails, we'll rely on the next check to use the CPU path.
+            # We cannot reassign a global variable here as it creates an UnboundLocalError.
+            pass
 
+    # Re-check CUPY_AVAILABLE in case it failed above and was a one-time error.
+    # The primary check is to handle when CuPy is not installed at all.
     if not CUPY_AVAILABLE:
         # --- Fallback to original iterative method ---
         for i, whisker_angle in enumerate(whisker_angles):
