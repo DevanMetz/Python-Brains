@@ -45,6 +45,7 @@ class SimplifiedUI:
         y_pos = create_slider('sim_length', 'Sim Length:', y_pos, 50, 1000, 100, '{}')
         y_pos = create_slider('population_size', 'Population:', y_pos, 10, 500, 100, '{}')
         y_pos = create_slider('mutation_rate', 'Mutation Rate:', y_pos, 0, 0.2, 0.05, '{:.2f}')
+        y_pos = create_slider('exploration_bonus', 'Exploration Bonus:', y_pos, 0, 0.1, 0.0, '{:.3f}')
         y_pos += 10
 
         pygame_gui.elements.UILabel(

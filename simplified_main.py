@@ -102,6 +102,7 @@ def main():
                         perception_radius=settings['vision_radius'],
                         steps_per_gen=settings['sim_length'],
                         mutation_rate=settings['mutation_rate'],
+                        exploration_bonus=settings['exploration_bonus'],
                         static_grid=current_map)
                     game.target = current_target
                     step_counter = 0
