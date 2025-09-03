@@ -127,6 +127,7 @@ def main():
                 elif event.ui_element == simulation_ui.to_map_editor_button:
                     current_state = GameState.MAP_EDITOR
                 elif event.ui_element == simulation_ui.back_to_sim_button:
+                    trainer.rebuild_pool() # Rebuild pool with new map data
                     current_state = GameState.SIMULATION
                 elif event.ui_element == design_menu.update_button:
                     num_whiskers = int(design_menu.whisker_slider.get_current_value())

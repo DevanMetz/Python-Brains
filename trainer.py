@@ -409,6 +409,20 @@ class TrainingSimulation:
             self.pool.close()
             self.pool.join()
             print("Multiprocessing pool cleaned up.")
+            self.pool = None
+
+    def rebuild_pool(self):
+        """
+        Rebuilds the multiprocessing pool to ensure workers have the latest
+        version of the tile_map after it has been edited.
+        """
+        self.cleanup()
+        try:
+            self.pool = Pool(processes=cpu_count(), initializer=init_worker, initargs=(self.tile_map,))
+            print("Multiprocessing pool rebuilt successfully.")
+        except (OSError, ImportError):
+            print("Warning: Multiprocessing pool failed to initialize. Running in single-threaded mode.")
+            self.pool = None
 
     def rebuild_with_new_architecture(self, new_arch, num_whiskers, perceivable_types, whisker_length):
         """
