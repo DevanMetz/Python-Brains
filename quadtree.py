@@ -19,20 +19,23 @@ class Rectangle:
                     self.bottom < other.top or
                     other.bottom < self.top)
 
+MAX_DEPTH = 8
+
 class QuadTree:
     """
     A Quadtree data structure for 2D spatial partitioning.
     Objects are stored in leaf nodes. When a node's capacity is exceeded,
     it subdivides, and all of its objects are pushed down to the appropriate
-    child nodes.
+    child nodes. Includes a max depth to prevent infinite recursion.
     """
-    def __init__(self, boundary, capacity=4):
+    def __init__(self, boundary, capacity=4, depth=0):
         if not isinstance(boundary, Rectangle):
             raise TypeError("boundary must be a Rectangle object")
         self.boundary = boundary
         self.capacity = capacity
         self.objects = []
         self.divided = False
+        self.depth = depth
 
     def subdivide(self):
         """Create four child QuadTrees."""
@@ -41,15 +44,15 @@ class QuadTree:
         w = self.boundary.w / 2
         h = self.boundary.h / 2
 
-        # Create the four sub-quadrants
+        new_depth = self.depth + 1
         ne = Rectangle(x + w / 2, y - h / 2, w, h)
-        self.northeast = QuadTree(ne, self.capacity)
+        self.northeast = QuadTree(ne, self.capacity, new_depth)
         nw = Rectangle(x - w / 2, y - h / 2, w, h)
-        self.northwest = QuadTree(nw, self.capacity)
+        self.northwest = QuadTree(nw, self.capacity, new_depth)
         se = Rectangle(x + w / 2, y + h / 2, w, h)
-        self.southeast = QuadTree(se, self.capacity)
+        self.southeast = QuadTree(se, self.capacity, new_depth)
         sw = Rectangle(x - w / 2, y + h / 2, w, h)
-        self.southwest = QuadTree(sw, self.capacity)
+        self.southwest = QuadTree(sw, self.capacity, new_depth)
 
         self.divided = True
 
@@ -67,24 +70,20 @@ class QuadTree:
         Insert an object into the Quadtree.
         An object must have a `get_bounding_box()` method that returns a Rectangle.
         """
-        # Do not insert if the object's bounding box doesn't intersect this node's boundary
         if not self.boundary.intersects(obj.get_bounding_box()):
             return False
 
         if self.divided:
-            # If this node is already subdivided, pass the object to all children.
-            # The children's own intersection checks will handle placement.
             self.northeast.insert(obj)
             self.northwest.insert(obj)
             self.southeast.insert(obj)
             self.southwest.insert(obj)
             return True
 
-        # If not subdivided, add the object to this node
         self.objects.append(obj)
 
-        # If capacity is exceeded after adding, subdivide the node
-        if len(self.objects) > self.capacity:
+        # If capacity is exceeded and we're not at max depth, subdivide.
+        if len(self.objects) > self.capacity and self.depth < MAX_DEPTH:
             self.subdivide()
 
         return True
