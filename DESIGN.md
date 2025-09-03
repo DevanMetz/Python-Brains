@@ -65,3 +65,22 @@ The third iteration introduced combat mechanics and more advanced training optio
 The `TrainingSimulation` now supports two distinct modes, selectable in the UI:
 -   **`TrainingMode.NAVIGATE`**: The original mode. Fitness is calculated based on the unit's proximity to a `Target` object.
 -   **`TrainingMode.COMBAT`**: A new mode. Fitness is calculated based on the damage dealt to the `Enemy`, with a small bonus for being close to the enemy. This allows for the evolution of aggressive, combat-oriented brains.
+
+## 8. Architecture V4: Performance Optimization
+As the complexity of the simulation and the size of the population grew, the single-threaded nature of the training loop in `trainer.py` became a significant performance bottleneck. The application was unable to utilize modern multi-core CPUs effectively. This version introduces a parallel processing architecture to address this.
+
+### 8.1. Identifying the Bottleneck
+The primary bottleneck was located in the `run_generation_step` method within the `TrainingSimulation` class. This method iterated through every unit in the population sequentially, performing two computationally expensive tasks for each:
+1.  **Input Calculation (`get_inputs`):** Ray-casting whiskers and checking for collisions with all other objects in the world.
+2.  **Neural Network Inference (`brain.forward`):** Performing a forward pass through the MLP.
+Since the state of each unit within a single simulation step is independent of the others, this loop was an ideal candidate for parallelization.
+
+### 8.2. Parallel Processing with `multiprocessing`
+To solve the bottleneck, the simulation loop was re-architected to use Python's built-in `multiprocessing` module.
+
+-   **Process Pool:** A `multiprocessing.Pool` is now initialized in the `TrainingSimulation` constructor, creating a pool of persistent worker processes, typically one for each available CPU core.
+-   **Worker Function:** The core logic for updating a single unit was extracted from the `Unit` class and placed into a standalone `run_single_unit_step` function in `trainer.py`. This "worker function" is what gets distributed to the pool.
+-   **Data Serialization:** Because `multiprocessing` requires data to be "pickled" to be sent between processes, game objects like `Unit` and `Target` were given a `to_dict()` method to convert their state into a simple, serializable dictionary. Complex objects that are not easily pickled (like `pygame.Vector2`) are converted to basic types (like tuples) before being sent.
+-   **Efficient State Sharing:** To avoid the high overhead of sending the large `TileMap` object to every worker for every task, it is now passed once to each worker process upon its creation using the pool's `initializer` function.
+
+This change allows the simulation to scale with the number of CPU cores, leading to a dramatic reduction in the time required to train a generation of brains.

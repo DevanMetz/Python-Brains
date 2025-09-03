@@ -222,6 +222,7 @@ def main():
         pygame.display.flip()
 
     # --- Cleanup ---
+    trainer.cleanup()
     pygame.quit()
     sys.exit()
 
