@@ -14,6 +14,14 @@ class Tile(Enum):
     EMPTY = 0
     WALL = 1
 
+class ObjectType(Enum):
+    """Defines the integer codes for different object types on the dynamic grid."""
+    EMPTY = 0
+    WALL = 1
+    UNIT = 2
+    ENEMY = 3
+    TARGET = 4
+
 class TileMap:
     """Manages the tile-based map for the simulation.
 

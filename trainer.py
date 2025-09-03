@@ -127,38 +127,79 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     return final_inputs, whisker_debug_info
 
 
-def _process_perception_results(unit_data, whisker_results, circle_object_types):
+def _rasterize_circles_on_grid(grid, objects, tile_size):
+    """Draws circle objects onto a grid for grid-based perception."""
+    from map import ObjectType
+    for obj in objects:
+        if not hasattr(obj, 'size'): continue
+
+        # Define a mapping from python object type string to ObjectType enum
+        type_map = {
+            "unit": ObjectType.UNIT,
+            "enemy": ObjectType.ENEMY,
+            "target": ObjectType.TARGET
+        }
+        obj_type_val = type_map.get(obj.type)
+        if not obj_type_val: continue
+
+        # Get bounding box in tile coordinates
+        min_x = int((obj.position.x - obj.size) / tile_size)
+        max_x = int((obj.position.x + obj.size) / tile_size)
+        min_y = int((obj.position.y - obj.size) / tile_size)
+        max_y = int((obj.position.y + obj.size) / tile_size)
+
+        # Iterate over the bounding box tiles
+        for gy in range(min_y, max_y + 1):
+            for gx in range(min_x, max_x + 1):
+                # Check if the tile center is within the circle's radius
+                tile_center_x = (gx + 0.5) * tile_size
+                tile_center_y = (gy + 0.5) * tile_size
+                dist_sq = (tile_center_x - obj.position.x)**2 + (tile_center_y - obj.position.y)**2
+
+                if dist_sq < obj.size**2:
+                    if 0 <= gx < grid.shape[0] and 0 <= gy < grid.shape[1]:
+                        # Don't overwrite walls
+                        if grid[gx, gy] == 0:
+                           grid[gx, gy] = obj_type_val.value
+
+def _process_perception_results(unit_data, whisker_results):
     """
     Helper to process raw whisker results for a single unit.
-    This converts distances and indices into the whisker_input vector and debug info.
+    This version uses object types returned directly from the kernel.
     """
+    from map import ObjectType
     unit_pos = pygame.Vector2(unit_data['position'])
     unit_angle = unit_data['angle']
     num_whiskers = unit_data['num_whiskers']
     whisker_length = unit_data['whisker_length']
     perceivable_types = unit_data['perceivable_types']
 
-    distances, indices = whisker_results
+    # Map from the ObjectType enum value back to the string type
+    type_map = {
+        ObjectType.WALL.value: "wall",
+        ObjectType.UNIT.value: "unit",
+        ObjectType.ENEMY.value: "enemy",
+        ObjectType.TARGET.value: "target"
+    }
+
+    distances, object_types_from_kernel = whisker_results
     whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, num_whiskers) if num_whiskers > 1 else np.array([0])
     whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
     whisker_debug_info = []
 
     for i in range(num_whiskers):
-        dist, idx = distances[i], indices[i]
+        dist, obj_type_val = distances[i], object_types_from_kernel[i]
         detected_type = None
+
         abs_angle_rad = unit_angle + whisker_angles[i]
-        start_point = unit_pos
+        start_offset = pygame.Vector2(unit_data['size'], 0).rotate(np.rad2deg(abs_angle_rad))
+        start_point = unit_pos + start_offset
         full_end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
         intersect_point = full_end_point
 
         if dist != np.inf and dist <= whisker_length:
-            if idx == -2:
-                detected_type = "wall"
-            # Explicitly check that the index is valid before using it
-            elif idx != -1 and idx < len(circle_object_types):
-                detected_type = circle_object_types[idx]
+            detected_type = type_map.get(obj_type_val)
 
-            # If a valid object was detected, process it
             if detected_type:
                 intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
                 if detected_type in perceivable_types:
@@ -285,16 +326,19 @@ class TrainingSimulation:
 
         if self.perception_cache:
             for buf in self.perception_cache.values(): buf.release()
+
         total_whiskers = self.population_size * self.num_whiskers
-        max_circles = self.population_size + len(self.world_objects)
         mf = cl.mem_flags
+
+        # The tile_map_buf is now the world_grid_buf and must be writeable
+        grid_size_bytes = self.tile_map.grid.nbytes
+        self.tile_map_buf = cl.Buffer(context, mf.READ_WRITE, size=max(1, grid_size_bytes))
+
+        # Simplified perception cache
         self.perception_cache['p1s_buf'] = cl.Buffer(context, mf.READ_WRITE, size=max(1, total_whiskers * 8))
         self.perception_cache['p2s_buf'] = cl.Buffer(context, mf.READ_WRITE, size=max(1, total_whiskers * 8))
-        self.perception_cache['centers_buf'] = cl.Buffer(context, mf.READ_WRITE, size=max(1, max_circles * 8))
-        self.perception_cache['radii_buf'] = cl.Buffer(context, mf.READ_WRITE, size=max(1, max_circles * 4))
         self.perception_cache['out_distances_buf'] = cl.Buffer(context, mf.WRITE_ONLY, size=max(1, total_whiskers * 4))
         self.perception_cache['out_indices_buf'] = cl.Buffer(context, mf.WRITE_ONLY, size=max(1, total_whiskers * 4))
-        self.perception_cache['whisker_parent_indices_buf'] = cl.Buffer(context, mf.READ_WRITE, size=max(1, total_whiskers * 4))
         print("SUCCESS: Initialized OpenCL perception cache for batched processing.")
 
     def _create_initial_population(self):
@@ -316,6 +360,7 @@ class TrainingSimulation:
 
         # --- Vectorized Perception Path (OpenCL) ---
         if OPENCL_AVAILABLE and self.pool:
+            # 1. Prepare whisker data
             total_whiskers = self.population_size * self.num_whiskers
             all_p1s = np.empty((total_whiskers, 2), dtype=np.float32)
             all_p2s = np.empty((total_whiskers, 2), dtype=np.float32)
@@ -324,62 +369,46 @@ class TrainingSimulation:
             for i, unit in enumerate(self.population):
                 start_idx, end_idx = i * self.num_whiskers, (i + 1) * self.num_whiskers
                 abs_angles = unit.angle + whisker_angles
-
-                # Whiskers should start at the edge of the unit, not the center
                 start_offset_vectors = np.column_stack([np.cos(abs_angles) * unit.size, np.sin(abs_angles) * unit.size])
                 p1_positions = np.array([unit.position.x, unit.position.y]) + start_offset_vectors
                 all_p1s[start_idx:end_idx] = p1_positions
-
                 end_vectors = np.column_stack([np.cos(abs_angles) * unit.whisker_length, np.sin(abs_angles) * unit.whisker_length])
                 all_p2s[start_idx:end_idx] = p1_positions + end_vectors
 
-            circle_objects = [obj for obj in all_objects if isinstance(obj, (Unit, Enemy, Target))]
-            # Create a mapping from a unit's ID to its index in the circle_objects list
-            circle_indices_map = {obj.id: i for i, obj in enumerate(circle_objects) if isinstance(obj, Unit)}
+            # 2. Prepare world grid by rasterizing objects onto it
+            # Start with a copy of the base wall map
+            dynamic_grid_int = np.array([t.value for t in self.tile_map.grid.flat], dtype=np.int32).reshape(self.tile_map.grid.shape)
+            circles_to_draw = [obj for obj in all_objects if 'size' in obj.__dict__ and obj.type != 'unit']
+            # Rasterize enemies and targets first
+            _rasterize_circles_on_grid(dynamic_grid_int, circles_to_draw, self.tile_map.tile_size)
+            # Rasterize units on top, so they take precedence
+            _rasterize_circles_on_grid(dynamic_grid_int, self.population, self.tile_map.tile_size)
 
-            all_whisker_parent_indices = np.empty(total_whiskers, dtype=np.int32)
-            for i, unit in enumerate(self.population):
-                start_idx, end_idx = i * self.num_whiskers, (i + 1) * self.num_whiskers
-                parent_circle_idx = circle_indices_map.get(unit.id, -1) # -1 if not found
-                all_whisker_parent_indices[start_idx:end_idx] = parent_circle_idx
-
-            if circle_objects:
-                centers_np = np.array([o.position for o in circle_objects], dtype=np.float32)
-                radii_np = np.array([o.size for o in circle_objects], dtype=np.float32)
-            else:
-                centers_np = np.empty((0, 2), dtype=np.float32)
-                radii_np = np.empty(0, dtype=np.float32)
-
+            # 3. Upload data to GPU
             cl.enqueue_copy(queue, self.perception_cache['p1s_buf'], all_p1s, is_blocking=False)
             cl.enqueue_copy(queue, self.perception_cache['p2s_buf'], all_p2s, is_blocking=False)
-            cl.enqueue_copy(queue, self.perception_cache['centers_buf'], centers_np, is_blocking=False)
-            cl.enqueue_copy(queue, self.perception_cache['radii_buf'], radii_np, is_blocking=False)
-            cl.enqueue_copy(queue, self.perception_cache['whisker_parent_indices_buf'], all_whisker_parent_indices, is_blocking=False)
+            cl.enqueue_copy(queue, self.tile_map_buf, dynamic_grid_int.T.flatten(), is_blocking=False) # Upload dynamic grid
 
-            detect_walls = "wall" in self.perceivable_types
-            detect_circles = any(t in self.perceivable_types for t in ["enemy", "target", "unit"])
-
+            # 4. Execute Kernel
             kernel_event = opencl_unified_perception(
-                queue, self.perception_cache['p1s_buf'], self.perception_cache['p2s_buf'], self.perception_cache['centers_buf'], self.perception_cache['radii_buf'],
-                self.perception_cache['out_distances_buf'], self.perception_cache['out_indices_buf'],
-                self.perception_cache['whisker_parent_indices_buf'],
-                total_whiskers, len(circle_objects), self.tile_map_buf, self.tile_map.grid_width, self.tile_map.tile_size,
-                detect_circles, detect_walls
+                queue, self.perception_cache['p1s_buf'], self.perception_cache['p2s_buf'],
+                self.tile_map_buf, self.perception_cache['out_distances_buf'], self.perception_cache['out_indices_buf'],
+                total_whiskers, self.tile_map.grid_width, self.tile_map.tile_size
             )
 
+            # 5. Read results back
             all_distances = np.empty(total_whiskers, dtype=np.float32)
             all_indices = np.empty(total_whiskers, dtype=np.int32)
-            # Read results back from the GPU. This must wait for the kernel to finish.
             cl.enqueue_copy(queue, all_distances, self.perception_cache['out_distances_buf'], wait_for=[kernel_event])
             cl.enqueue_copy(queue, all_indices, self.perception_cache['out_indices_buf'], wait_for=[kernel_event]).wait()
 
-            circle_object_types = [o.type for o in circle_objects]
+            # 6. Process results for each unit
             for i, unit in enumerate(self.population):
                 start_idx, end_idx = i * self.num_whiskers, (i + 1) * self.num_whiskers
                 whisker_results = (all_distances[start_idx:end_idx], all_indices[start_idx:end_idx])
 
                 unit_data = unit.to_dict()
-                whisker_inputs, whisker_debug_info = _process_perception_results(unit_data, whisker_results, circle_object_types)
+                whisker_inputs, whisker_debug_info = _process_perception_results(unit_data, whisker_results)
 
                 relative_vec = self.target.position - unit.position
                 relative_vec = relative_vec.rotate(-np.rad2deg(unit.angle))
