@@ -1,9 +1,10 @@
 import pygame
 import numpy as np
 
-def draw_mlp(surface, brain):
+def draw_mlp(surface, brain, input_labels=None):
     """
     Draws a representation of the MLP's structure and weights onto a surface.
+    Optionally labels the input nodes.
     """
     if not brain:
         return
@@ -58,11 +59,17 @@ def draw_mlp(surface, brain):
 
                 pygame.draw.line(surface, color_with_alpha, start_node_pos, end_node_pos, thickness)
 
-    # Draw nodes (circles)
+    # Draw nodes (circles) and input labels
     for i, layer_nodes in enumerate(node_positions):
         for j, node_pos in enumerate(layer_nodes):
             pygame.draw.circle(surface, (200, 200, 200), (int(node_pos[0]), int(node_pos[1])), node_radius)
             pygame.draw.circle(surface, (50, 50, 50), (int(node_pos[0]), int(node_pos[1])), node_radius, 1)
+
+            # If this is the input layer and we have labels, draw them
+            if i == 0 and input_labels and j < len(input_labels):
+                label_text = font.render(input_labels[j], True, (200, 200, 200))
+                surface.blit(label_text, (node_pos[0] - node_radius - label_text.get_width() - 5, node_pos[1] - label_text.get_height() / 2))
+
 
     # Draw labels
     input_text = font.render("Inputs", True, (200, 200, 200))
