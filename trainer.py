@@ -336,9 +336,8 @@ def clear_cache_worker(_):
                 brain_data['intermediate_b'].release()
         _gpu_brain_cache.clear()
 
-    if _tile_map_buf_global:
-        _tile_map_buf_global.release()
-        _tile_map_buf_global = None
+    # Do not release the tile_map_buf_global here, as it's static and
+    # should persist for the entire life of the worker process.
 
     return True
 
