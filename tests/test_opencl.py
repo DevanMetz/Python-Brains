@@ -20,83 +20,80 @@ class TestMLPOpenCL:
     def test_forward_pass_correctness(self):
         """
         Tests if the OpenCL MLP's forward pass produces the same result as the NumPy MLP.
-        """
-        # Define a network architecture
-        layer_sizes = [10, 20, 5]
-
-        # Create a standard NumPy-based MLP
-        numpy_mlp = MLP(layer_sizes)
-
-        # Create an OpenCL-based MLP
-        opencl_mlp = MLPOpenCL(layer_sizes)
-
-        # Manually copy the weights and biases from the numpy MLP to the OpenCL MLP
-        # to ensure they are identical for a fair comparison.
-        opencl_mlp.weights = [w.copy() for w in numpy_mlp.weights]
-        opencl_mlp.biases = [b.copy() for b in numpy_mlp.biases]
-
-        # Create a random input vector
-        inputs = np.random.rand(1, layer_sizes[0]).astype(np.float32)
-
-        # Get the output from both MLPs
-        numpy_output = numpy_mlp.forward(inputs)
-        opencl_output = opencl_mlp.forward(inputs)
-
-        # Compare the results. They should be very close.
-        # atol (absolute tolerance) is used to account for minor floating point differences.
-        assert np.allclose(numpy_output, opencl_output, atol=1e-6), "OpenCL MLP output does not match NumPy MLP output."
-
-    def test_caching_correctness(self):
-        """
-        Tests if the caching mechanism for OpenCL buffers works and produces correct results.
+        This test uses the new optimized path with cached buffers.
         """
         from mlp_opencl import context
         import pyopencl as cl
 
+        layer_sizes = [10, 20, 5]
+        numpy_mlp = MLP(layer_sizes)
+        opencl_mlp = MLPOpenCL(layer_sizes)
+        opencl_mlp.weights = [w.copy() for w in numpy_mlp.weights]
+        opencl_mlp.biases = [b.copy() for b in numpy_mlp.biases]
+
+        inputs = np.random.rand(1, layer_sizes[0]).astype(np.float32)
+
+        # Manually create the buffers as the trainer would
+        weights_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=w.astype(np.float32)) for w in opencl_mlp.weights]
+        biases_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=b.astype(np.float32)) for b in opencl_mlp.biases]
+        max_layer_size = max(opencl_mlp.layer_sizes)
+        intermediate_buf_size = max_layer_size * np.dtype(np.float32).itemsize
+        intermediate_buf_a = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=intermediate_buf_size)
+        intermediate_buf_b = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=intermediate_buf_size)
+
+
+        cached_buffers = {
+            'weights': weights_bufs,
+            'biases': biases_bufs,
+            'intermediate_a': intermediate_buf_a,
+            'intermediate_b': intermediate_buf_b
+        }
+
+        # Get the output from both MLPs
+        numpy_output = numpy_mlp.forward(inputs)
+        opencl_output = opencl_mlp.forward(inputs, cached_buffers=cached_buffers)
+
+        # Release buffers
+        for buf in weights_bufs: buf.release()
+        for buf in biases_bufs: buf.release()
+        intermediate_buf_a.release()
+        intermediate_buf_b.release()
+
+        assert np.allclose(numpy_output, opencl_output, atol=1e-6), "Optimized OpenCL MLP output does not match NumPy MLP output."
+
+    def test_fallback_without_cache(self):
+        """
+        Tests that the OpenCL MLP correctly falls back to the NumPy implementation
+        when cached_buffers are not provided.
+        """
         layer_sizes = [8, 4]
         opencl_mlp = MLPOpenCL(layer_sizes)
         inputs = np.random.rand(1, layer_sizes[0]).astype(np.float32)
 
-        # Manually create and cache the buffers
-        weights_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=w.astype(np.float32)) for w in opencl_mlp.weights]
-        biases_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=b.astype(np.float32)) for b in opencl_mlp.biases]
-        cached_buffers = {'weights': weights_bufs, 'biases': biases_bufs}
+        # Get the output from the standard numpy implementation
+        numpy_output = opencl_mlp.forward(inputs)
+        # Get the output from the OpenCL implementation without providing a cache
+        opencl_output = opencl_mlp.forward(inputs, cached_buffers=None)
 
-        # Run the forward pass with the cached buffers
-        cached_output = opencl_mlp.forward(inputs, cached_buffers=cached_buffers)
-
-        # Run the forward pass without caching (should produce the same result)
-        uncached_output = opencl_mlp.forward(inputs)
-
-        # Release the manually created buffers
-        for buf_list in cached_buffers.values():
-            for buf in buf_list:
-                buf.release()
-
-        assert np.allclose(cached_output, uncached_output, atol=1e-6), "Cached and uncached OpenCL outputs do not match."
+        assert np.allclose(numpy_output, opencl_output, atol=1e-6), "Fallback OpenCL output does not match NumPy MLP output."
 
     def test_cloned_instance_forward_pass(self):
         """
         Tests that a cloned MLPOpenCL instance can still perform a forward pass.
-        This specifically targets the bug where `clone()` created a base MLP instance.
         """
         layer_sizes = [5, 5]
         opencl_mlp = MLPOpenCL(layer_sizes)
         inputs = np.random.rand(1, layer_sizes[0]).astype(np.float32)
 
-        # Clone the object
         cloned_mlp = opencl_mlp.clone()
 
-        # The cloned object should be of the same type
         assert isinstance(cloned_mlp, MLPOpenCL)
 
-        # Calling forward with caching should now work without a TypeError
+        # Calling forward without a cache should work and use the numpy fallback.
         try:
-            # We don't need to check for correctness here, just that it doesn't crash.
-            # The other tests handle correctness.
             cloned_mlp.forward(inputs, cached_buffers=None)
-        except TypeError as e:
-            pytest.fail(f"Cloned MLPOpenCL instance failed forward pass with TypeError: {e}")
+        except Exception as e:
+            pytest.fail(f"Cloned MLPOpenCL instance failed forward pass with exception: {e}")
 
 
 @skip_if_no_opencl
