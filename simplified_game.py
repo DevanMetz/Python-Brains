@@ -145,10 +145,16 @@ class SimplifiedGame:
             elite_unit.y = start_y
             next_gen_units.append(elite_unit)
 
+        # For the rest of the population, create mutated clones of the elites
+        elite_pool = sorted_units[:num_elites]
+        if not elite_pool: # Ensure there's at least one elite to clone from
+            elite_pool = [sorted_units[0]]
+
         while len(next_gen_units) < self.population_size:
-            parent1 = np.random.choice(sorted_units[:self.population_size//2])
-            parent2 = np.random.choice(sorted_units[:self.population_size//2])
-            child_brain = MLP.crossover(parent1.brain, parent2.brain)
+            # Pick a random elite parent
+            parent = np.random.choice(elite_pool)
+            # Clone its brain and mutate it
+            child_brain = parent.brain.clone()
             child_brain.mutate(mutation_rate=self.mutation_rate, mutation_amount=0.1)
             next_gen_units.append(SimplifiedUnit(id=len(next_gen_units), x=start_x, y=start_y, brain=child_brain))
 
