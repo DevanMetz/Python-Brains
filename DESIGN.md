@@ -120,3 +120,15 @@ While the previous optimizations focused on the simulation's computational bottl
     -   **Population Size:** Allows the user to dynamically change the total number of units in the simulation.
     -   **Drawn Units:** Allows the user to control how many of the fittest units are rendered on screen.
 -   **UI Refactoring:** To accommodate these new controls cleanly, the simulation-related UI elements were refactored from `main.py` into a dedicated `SimulationUI` class in `ui.py`.
+
+## 10. Architecture V6: Simplified CPU-Only Simulation
+This version introduces a new, parallel application that exists alongside the main, more complex simulation. The goal of this new application is to provide a highly simplified, grid-based environment that runs entirely on the CPU. This is useful for rapid prototyping of AI behaviors and for educational purposes where the complexities of continuous space, ray-casting, and GPU acceleration are not required.
+
+### 10.1. Core Design Philosophy
+The simplified simulation overhauls the core mechanics of unit representation, perception, and action to be entirely discrete and tile-based.
+
+-   **New Application Entry Point:** The new simulation is self-contained and runs from `simplified_main.py`. The core logic is housed in `simplified_game.py`.
+-   **Discrete State:** All objects, including units, exist on a discrete grid. A unit's position is represented by integer coordinates (x, y), not floating-point vectors.
+-   **Tile-Based Perception:** The complex "typed whisker" perception system is replaced with a simple, local-area scan. A unit's "perception" consists of reading the tile types (e.g., EMPTY, WALL, OTHER_UNIT) in its immediate 3x3 neighborhood. This provides a fixed-size, simple input vector for the neural network.
+-   **Discrete Actions:** A unit's actions are simplified to a small, discrete set: move North, East, South, West, or Stay. The MLP's output layer has one neuron for each action, and the unit executes the action corresponding to the neuron with the highest activation.
+-   **CPU-Only Multiprocessing:** The simulation is designed to be computationally simple and runs exclusively on the CPU. It uses Python's `multiprocessing` module to parallelize the update loop for all units, making it efficient on multi-core processors without requiring any GPU libraries or hardware. The worker function `process_unit_logic` is designed to be a pure function, receiving all necessary data as arguments, making it easy to distribute.
