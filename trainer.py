@@ -1,3 +1,16 @@
+"""
+Manages the core training simulation, genetic algorithm, and multiprocessing.
+
+This module contains the `TrainingSimulation` class, which orchestrates the
+entire AI training process. It handles the creation of unit populations,
+manages the simulation steps, evaluates fitness, and evolves the population
+using a genetic algorithm.
+
+It also defines the worker functions that are distributed to a multiprocessing
+pool, allowing the simulation to run in parallel for significant performance
+gains. This includes a sophisticated, vectorized approach to calculating unit
+sensory inputs using CuPy for GPU acceleration where available.
+"""
 import numpy as np
 import json
 import os
@@ -14,18 +27,55 @@ from quadtree import QuadTree, Rectangle
 _tile_map_global = None
 
 def init_worker(tile_map):
-    """
-    Initializer for each worker process.
-    Makes the tile_map a global variable in the worker.
+    """Initializer for each worker process in the multiprocessing pool.
+
+    This function makes the provided `tile_map` a global variable within the
+    worker's scope. This is an optimization to avoid serializing and sending
+    the large tile map data with every task, as it's read-only and shared
+    by all workers.
+
+    Args:
+        tile_map (TileMap): The global tile map for the simulation.
     """
     global _tile_map_global
     _tile_map_global = tile_map
 
 
 def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
-    """
-    Calculates MLP inputs. Uses a vectorized CuPy implementation for whisker-object
-    intersections if available, otherwise falls back to an iterative approach.
+    """Calculates all sensory inputs for a single unit's MLP brain.
+
+    This function is a critical part of the simulation, responsible for
+    translating the world state into a numerical format that the MLP can
+    understand. It performs the following steps:
+    1.  Casts "whiskers" (rays) out from the unit.
+    2.  Uses a high-performance vectorized method (GPU-accelerated with CuPy
+        if available) to find intersections between these whiskers and nearby
+        game objects.
+    3.  Performs a separate check for whisker intersections with wall tiles.
+    4.  Combines these results to find the closest object detected by each
+        whisker.
+    5.  Encodes the distance and type of the detected object into a normalized
+        input value.
+    6.  Calculates the unit's relative position to the target.
+    7.  Concatenates whisker inputs, target vector, and the unit's internal
+        state (velocity, angle) into a single input vector for the MLP.
+
+    A fallback to a simpler, iterative method is included if CuPy is not
+    available or if the vectorized calculation fails.
+
+    Args:
+        unit_data (dict): A dictionary containing the serialized state of the
+            unit being processed.
+        local_objects_data (list[dict]): A list of serialized dictionaries for
+            game objects that are near the unit (pre-filtered by the Quadtree).
+        target_pos_data (tuple[float, float]): The (x, y) coordinates of the
+            current target object.
+
+    Returns:
+        tuple: A tuple containing:
+            - np.ndarray: The final, flattened numpy array of all MLP inputs.
+            - list[dict]: A list of dictionaries containing debug information
+              for each whisker, used for visualization.
     """
     unit_pos = pygame.Vector2(unit_data['position'])
     unit_angle = unit_data['angle']
@@ -180,8 +230,22 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
 
 
 def run_single_unit_step(unit_data, local_objects_data, target_position_data):
-    """
-    The main worker function, refactored to accept local world data from the Quadtree.
+    """The main worker function for processing one unit for one simulation step.
+
+    This function is executed by a worker in the multiprocessing pool. It takes
+    the serialized state of a unit and its local environment, calculates the
+    necessary inputs for the unit's brain, performs a forward pass on the MLP
+    to get the unit's actions, and returns the results.
+
+    Args:
+        unit_data (dict): Serialized state of the unit.
+        local_objects_data (list[dict]): Serialized list of nearby objects.
+        target_position_data (tuple[float, float]): Position of the target.
+
+    Returns:
+        dict: A dictionary containing the results of the step, including the
+            unit's ID, the actions decided by its brain, and whisker
+            visualization data.
     """
     inputs, whisker_debug_info = get_unit_inputs(
         unit_data,
@@ -200,7 +264,21 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data):
 
 
 def run_single_unit_step_wrapper(task_data):
-    """Unpacks a dictionary and calls the main worker function."""
+    """Unpacks a task dictionary and calls the main worker function.
+
+    This wrapper is necessary because `pool.map` only accepts functions that
+    take a single argument. This function takes a dictionary containing all the
+    necessary data and unpacks it into the arguments required by
+    `run_single_unit_step`.
+
+    Args:
+        task_data (dict): A dictionary containing the arguments for the main
+            worker function: `unit_data`, `local_objects_data`, and
+            `target_position_data`.
+
+    Returns:
+        dict: The result from `run_single_unit_step`.
+    """
     return run_single_unit_step(
         task_data['unit_data'],
         task_data['local_objects_data'],
@@ -209,14 +287,58 @@ def run_single_unit_step_wrapper(task_data):
 
 
 class TrainingMode:
+    """An enumeration for the different training modes available."""
     NAVIGATE = 1
+    """Fitness is based on proximity to a target."""
     COMBAT = 2
+    """Fitness is based on damage dealt to an enemy."""
 
 class TrainingSimulation:
     """
-    Manages the genetic algorithm training process.
+    Manages the genetic algorithm training process for a population of units.
+
+    This class is the central controller for the simulation. It initializes the
+    world, creates and manages a population of AI-controlled units, and runs
+    the evolutionary training loop. It uses a multiprocessing pool to parallelize
+    the simulation of each unit and a Quadtree to optimize collision and
+    perception checks.
+
+    Attributes:
+        population_size (int): The total number of units in the simulation.
+        num_to_draw (int): The number of units to render on screen.
+        world_width (int): The width of the simulation world in pixels.
+        world_height (int): The height of the simulation world in pixels.
+        tile_map (TileMap): The map of wall and empty tiles.
+        generation (int): The current generation number.
+        num_whiskers (int): The number of sensory whiskers each unit has.
+        whisker_length (float): The maximum length of each whisker.
+        perceivable_types (list[str]): The object types units can "see".
+        training_mode (TrainingMode): The current fitness evaluation mode.
+        pool (multiprocessing.Pool): The pool of worker processes.
+        mlp_architecture (list[int]): The layer sizes of the units' brains.
+        target (Target): The target object for navigation tasks.
+        enemy (Enemy): The enemy object for combat tasks.
+        world_objects (list): A list of static objects in the world.
+        projectiles (list[Projectile]): A list of active projectiles.
+        population (list[Unit]): The list of all units in the simulation.
+        population_map (dict[int, Unit]): A mapping from unit ID to unit object.
+        quadtree (QuadTree): The spatial partitioning data structure.
     """
     def __init__(self, population_size, world_size, tile_map, num_whiskers=7, perceivable_types=None, whisker_length=150):
+        """Initializes the training simulation environment.
+
+        Args:
+            population_size (int): The number of units in the population.
+            world_size (tuple[int, int]): The (width, height) of the simulation
+                world in pixels.
+            tile_map (TileMap): The tile map object for the simulation.
+            num_whiskers (int, optional): The number of whiskers per unit.
+                Defaults to 7.
+            perceivable_types (list[str], optional): A list of object type
+                strings that units can perceive. Defaults to a standard set.
+            whisker_length (int, optional): The maximum length of the whiskers.
+                Defaults to 150.
+        """
         self.population_size = population_size
         self.num_to_draw = population_size # Default to drawing all units
         self.world_width, self.world_height = world_size
@@ -256,6 +378,11 @@ class TrainingSimulation:
         self.quadtree = QuadTree(qt_boundary, capacity=4)
 
     def _create_initial_population(self):
+        """Creates the first generation of units with random brains.
+
+        Returns:
+            list[Unit]: A list of newly created Unit objects.
+        """
         population = []
         for i in range(self.population_size):
             brain = MLP(self.mlp_architecture)
@@ -270,8 +397,17 @@ class TrainingSimulation:
         return population
 
     def run_generation_step(self):
-        """
-        Runs a single step of the simulation, using the Quadtree for collision optimization.
+        """Runs a single frame/step of the simulation for the entire population.
+
+        This method orchestrates the core simulation logic for one step:
+        1.  Rebuilds the Quadtree with the current positions of all objects.
+        2.  For each unit, queries the Quadtree to find nearby objects.
+        3.  Creates a task for each unit containing its state and local object
+            data.
+        4.  Distributes these tasks to the multiprocessing pool for parallel
+            execution.
+        5.  Applies the results (actions) from the workers back to the units.
+        6.  Updates all projectiles and handles their collisions.
         """
         # 1. Populate the Quadtree
         self.quadtree.clear()
@@ -347,15 +483,39 @@ class TrainingSimulation:
                         break # Projectile is gone, stop checking this projectile
 
     def get_drawable_units(self):
-        """
-        Returns a slice of the current population to be drawn on screen.
-        This ensures that the units shown are always the ones being actively simulated.
+        """Returns a slice of the population to be drawn on screen.
+
+        This is used to improve rendering performance by only drawing a subset
+        of the total population, while still simulating all of them.
+
+        Returns:
+            list[Unit]: The sub-list of units to be rendered.
         """
         return self.population[:self.num_to_draw]
 
     def evolve_population(self, elitism_frac=0.1, mutation_rate=0.05):
-        """
-        Evaluates fitness based on the current training mode and creates a new generation.
+        """Evaluates fitness and creates a new generation of units.
+
+        This method implements the genetic algorithm:
+        1.  Calculates a fitness score for each unit based on the current
+            `training_mode`.
+        2.  Sorts the population by fitness.
+        3.  Selects the top-performing units ("elites") to pass directly to
+            the next generation, unchanged.
+        4.  Fills the rest of the new population by repeatedly selecting two
+            high-fitness parents, performing crossover on their brains to
+            create a child, and mutating the child's brain.
+        5.  Replaces the old population with the new one.
+
+        Args:
+            elitism_frac (float, optional): The fraction of the population to
+                carry over as elites. Defaults to 0.1.
+            mutation_rate (float, optional): The probability for each weight
+                or bias in a child's brain to be mutated. Defaults to 0.05.
+
+        Returns:
+            float: The fitness score of the best-performing unit in the
+                   previous generation.
         """
         fitness_scores = []
         if self.training_mode == TrainingMode.NAVIGATE:
@@ -403,7 +563,8 @@ class TrainingSimulation:
 
     def cleanup(self):
         """
-        Cleans up resources, specifically the multiprocessing pool.
+        Cleans up resources, specifically terminating the multiprocessing pool.
+        This should be called before the application exits.
         """
         if self.pool:
             self.pool.close()
@@ -413,8 +574,10 @@ class TrainingSimulation:
 
     def rebuild_pool(self):
         """
-        Rebuilds the multiprocessing pool to ensure workers have the latest
-        version of the tile_map after it has been edited.
+        Shuts down and recreates the multiprocessing pool.
+
+        This is necessary after the tile map has been edited to ensure that
+        the worker processes are re-initialized with the updated map data.
         """
         self.cleanup()
         try:
@@ -425,8 +588,17 @@ class TrainingSimulation:
             self.pool = None
 
     def rebuild_with_new_architecture(self, new_arch, num_whiskers, perceivable_types, whisker_length):
-        """
-        Re-initializes the simulation with a new MLP architecture and I/O config.
+        """Resets the entire simulation with a new unit brain configuration.
+
+        This method is called when the user designs a new AI in the UI. It
+        replaces the current population with a brand new, randomly initialized
+        one based on the specified architecture.
+
+        Args:
+            new_arch (list[int]): The MLP layer sizes for the new brains.
+            num_whiskers (int): The number of whiskers for the new units.
+            perceivable_types (list[str]): The object types the new units can see.
+            whisker_length (int): The whisker length for the new units.
         """
         print(f"Creating new population with arch: {new_arch}, {num_whiskers} whiskers, {whisker_length} length, sensing: {perceivable_types}")
         self.mlp_architecture = new_arch
@@ -442,8 +614,10 @@ class TrainingSimulation:
         self.generation = 0
 
     def set_population_size(self, new_size):
-        """
-        Updates the population size and resets the simulation.
+        """Updates the population size and resets the simulation.
+
+        Args:
+            new_size (int): The desired total number of units.
         """
         print(f"Setting new population size to: {new_size}")
         self.population_size = new_size
@@ -458,8 +632,15 @@ class TrainingSimulation:
         self.generation = 0
 
     def save_fittest_brain(self, filepath_prefix="saved_brains/brain"):
-        """
-        Saves the architecture and weights of the fittest brain in the population.
+        """Saves the architecture and weights of the current fittest brain.
+
+        Calculates fitness for the current population, identifies the best
+        performing unit, and saves its brain's architecture (`.json`) and
+        weights/biases (`.npz`) to disk.
+
+        Args:
+            filepath_prefix (str, optional): The base path and filename for the
+                saved files. Defaults to "saved_brains/brain".
         """
         if not self.population:
             print("Warning: Population is empty. Cannot save brain.")
@@ -500,8 +681,15 @@ class TrainingSimulation:
         print(f"Saved fittest brain to {json_path} and {weights_path}")
 
     def load_brain_from_file(self, filepath_prefix="saved_brains/brain"):
-        """
-        Loads a brain from files and rebuilds the population with it.
+        """Loads a brain from files and replaces the current population with it.
+
+        Reads a saved brain's architecture (`.json`) and weights (`.npz`),
+        then rebuilds the entire population. Each unit in the new population
+        receives a clone of the loaded brain.
+
+        Args:
+            filepath_prefix (str, optional): The base path and filename for the
+                brain files to load. Defaults to "saved_brains/brain".
         """
         json_path = f"{filepath_prefix}_arch.json"
         weights_path = f"{filepath_prefix}_weights.npz"

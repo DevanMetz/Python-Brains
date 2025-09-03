@@ -1,11 +1,30 @@
+"""
+Manages the user interface components of the application.
+
+This module contains classes that encapsulate the different UI screens and
+panels, such as the AI Design Menu and the main Simulation UI. These classes
+are responsible for creating, managing, and handling interactions with all the
+`pygame_gui` elements like buttons, sliders, and text boxes.
+"""
 import pygame
 import pygame_gui
 
 class DesignMenu:
     """
-    Manages the UI elements for the AI Design Menu.
+    Manages the UI elements for the AI Design Menu screen.
+
+    This class builds and controls the panel where the user can define the
+    architecture and sensory parameters of the AI brains, including the number
+    of MLP layers, whisker configuration, and perceivable object types.
     """
     def __init__(self, rect, ui_manager):
+        """Initializes the DesignMenu.
+
+        Args:
+            rect (pygame.Rect): The rectangle defining the panel's position
+                and size.
+            ui_manager (pygame_gui.UIManager): The main UI manager.
+        """
         self.panel = pygame_gui.elements.UIPanel(
             relative_rect=rect,
             manager=ui_manager,
@@ -110,15 +129,28 @@ class DesignMenu:
         self.panel.hide()
 
     def show(self):
+        """Makes the design menu panel and all its elements visible."""
         self.panel.show()
 
     def hide(self):
+        """Hides the design menu panel and all its elements."""
         self.panel.hide()
 
     def get_architecture_from_input(self, input_nodes, output_nodes):
-        """
-        Parses the text input and returns a valid MLP architecture list.
-        Returns None if the input is invalid.
+        """Parses the text input for hidden layers to define an MLP architecture.
+
+        Constructs a list of layer sizes for an MLP, including the provided
+        input and output node counts. Handles empty input and validates that
+        all specified layer sizes are positive integers.
+
+        Args:
+            input_nodes (int): The number of neurons in the input layer.
+            output_nodes (int): The number of neurons in the output layer.
+
+        Returns:
+            list[int] or None: A list representing the full MLP architecture
+            (e.g., `[input_nodes, hidden_1, hidden_2, output_nodes]`), or
+            `None` if the text input is invalid.
         """
         try:
             hidden_layers_str = self.arch_text_entry.get_text()
@@ -137,7 +169,12 @@ class DesignMenu:
             return None
 
     def get_perceivable_types(self):
-        """Returns a list of selected type strings."""
+        """Gets the list of object types selected in the UI checkboxes.
+
+        Returns:
+            list[str]: A list of strings for each checked perception type
+            (e.g., ["wall", "enemy", "unit"]).
+        """
         types = []
         if self.sense_wall_checkbox.checked:
             types.append("wall")
@@ -151,9 +188,23 @@ class DesignMenu:
 
 class SimulationUI:
     """
-    Manages the UI elements for the main simulation view, including all sliders.
+    Manages the UI elements for the main simulation view.
+
+    This class builds and controls the HUD (Heads-Up Display) for the main
+    simulation screen, including buttons for navigating to other menus,
+    changing training modes, and sliders for controlling simulation parameters
+    like population size and simulation speed.
     """
     def __init__(self, world_width, world_height, ui_manager, initial_params):
+        """Initializes the SimulationUI.
+
+        Args:
+            world_width (int): The width of the game world, used for positioning.
+            world_height (int): The height of the game world, used for positioning.
+            ui_manager (pygame_gui.UIManager): The main UI manager.
+            initial_params (dict): A dictionary containing the initial values
+                for the UI sliders, such as 'population_size'.
+        """
         self.manager = ui_manager
 
         # --- Top-right buttons ---
@@ -228,15 +279,25 @@ class SimulationUI:
         ]
 
     def show(self):
+        """Makes all simulation UI elements visible."""
         for element in self.elements:
             element.show()
 
     def hide(self):
+        """Hides all simulation UI elements."""
         for element in self.elements:
             element.hide()
 
     def update_drawn_units_range(self, max_value):
-        """Dynamically updates the range of the 'Drawn Units' slider."""
+        """Dynamically updates the range of the 'Drawn Units' slider.
+
+        This is called when the total population size changes, to ensure that
+        the user cannot select to draw more units than actually exist.
+
+        Args:
+            max_value (int): The new maximum value for the slider, typically
+                the new population size.
+        """
         current_val = self.drawn_units_slider.get_current_value()
         self.drawn_units_slider.value_range = (1, max_value)
         # Clamp the current value to the new range
