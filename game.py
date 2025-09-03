@@ -136,8 +136,11 @@ class Unit:
 
         for i, whisker_angle in enumerate(self.whisker_angles):
             abs_angle = self.angle + whisker_angle
-            start_point = self.position
-            end_point = self.position + pygame.Vector2(self.whisker_length, 0).rotate(np.rad2deg(abs_angle))
+
+            # Whiskers start at the edge of the unit's body
+            start_offset = pygame.Vector2(self.size, 0).rotate(np.rad2deg(abs_angle))
+            start_point = self.position + start_offset
+            end_point = start_point + pygame.Vector2(self.whisker_length, 0).rotate(np.rad2deg(abs_angle))
 
             closest_dist = self.whisker_length
             detected_type = None
