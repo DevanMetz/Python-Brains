@@ -273,17 +273,17 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data, br
                 weights_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=w.astype(np.float32)) for w in brain.weights]
                 biases_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=b.astype(np.float32)) for b in brain.biases]
 
-                # The single activations buffer needs to be large enough for the ping-pong offset strategy.
+                # Create two intermediate buffers, large enough to hold the activations of the largest layer.
                 max_layer_size = max(brain.layer_sizes)
-                # Size needs to be 2 * max_layer_size to hold input and output for any layer.
-                activations_buf_size = max_layer_size * 2 * np.dtype(np.float32).itemsize
-                activations_buf = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=activations_buf_size)
+                intermediate_buf_size = max_layer_size * np.dtype(np.float32).itemsize
+                intermediate_buf_a = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=intermediate_buf_size)
+                intermediate_buf_b = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=intermediate_buf_size)
 
                 _gpu_brain_cache[brain_id] = {
                     'weights': weights_bufs,
                     'biases': biases_bufs,
-                    'activations_buf': activations_buf,
-                    'max_layer_size': max_layer_size
+                    'intermediate_a': intermediate_buf_a,
+                    'intermediate_b': intermediate_buf_b
                 }
 
             # Run the forward pass using the cached OpenCL buffers.
@@ -321,9 +321,11 @@ def clear_cache_worker(_):
                 buf.release()
             for buf in brain_data['biases']:
                 buf.release()
-            # Also release the new activations buffer
-            if 'activations_buf' in brain_data:
-                brain_data['activations_buf'].release()
+            # Also release the intermediate buffers
+            if 'intermediate_a' in brain_data:
+                brain_data['intermediate_a'].release()
+            if 'intermediate_b' in brain_data:
+                brain_data['intermediate_b'].release()
         _gpu_brain_cache.clear()
     return True
 

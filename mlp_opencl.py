@@ -31,15 +31,12 @@ except Exception as e:
 
 # --- OpenCL Kernel for a single layer's forward pass ---
 # This C-like code will be compiled and run on the GPU.
-# This optimized kernel uses offsets to work with a single, pre-allocated
-# buffer for all layer activations, minimizing buffer creation and data transfers.
 kernel_code = """
-__kernel void forward_layer_optimized(
-    __global float *activations_buffer, // A single buffer for all activations
+__kernel void forward_layer(
+    __global const float *input_buffer,
     __global const float *weights_buffer,
     __global const float *biases_buffer,
-    const int input_offset,
-    const int output_offset,
+    __global float *output_buffer,
     const int input_size,
     const int output_size)
 {
@@ -53,14 +50,12 @@ __kernel void forward_layer_optimized(
         // Perform the dot product of the input vector and the i-th column of the weight matrix.
         for (int j = 0; j < input_size; ++j) {
             // Accessing weights in column-major order (standard for NumPy)
-            // Input is read from the shared buffer at a specified offset.
-            sum += activations_buffer[input_offset + j] * weights_buffer[j * output_size + i];
+            sum += input_buffer[j] * weights_buffer[j * output_size + i];
         }
         // Add the bias for this neuron.
         sum += biases_buffer[i];
-        // Apply the tanh activation function and store the result in the shared buffer
-        // at a specified offset.
-        activations_buffer[output_offset + i] = tanh(sum);
+        // Apply the tanh activation function and store the result.
+        output_buffer[i] = tanh(sum);
     }
 }
 """
@@ -70,7 +65,7 @@ forward_layer_kernel = None
 if OPENCL_AVAILABLE:
     try:
         program = cl.Program(context, kernel_code).build()
-        forward_layer_kernel = program.forward_layer_optimized
+        forward_layer_kernel = program.forward_layer
     except cl.Error as e:
         print(f"ERROR: Failed to compile OpenCL kernel: {e}")
         # Disable OpenCL if compilation fails
@@ -83,9 +78,9 @@ class MLPOpenCL(MLP):
 
     This implementation is highly optimized to minimize CPU-GPU data transfers.
     It performs the entire multi-layer forward pass on the GPU by using a
-    single, large, pre-allocated buffer for all layer activations. This avoids
-    the overhead of creating new buffers or copying intermediate results back
-    to the CPU for each layer.
+    "ping-pong" strategy with two pre-allocated buffers for all layer activations.
+    This avoids the overhead of creating new buffers or copying intermediate
+    results back to the CPU for each layer.
 
     Inherits from the base MLP class to reuse the weight/bias initialization
     and the genetic algorithm methods (crossover, mutation).
@@ -96,7 +91,7 @@ class MLPOpenCL(MLP):
 
         This method executes the entire forward pass on the GPU. It requires a
         `cached_buffers` dictionary containing pre-allocated OpenCL buffers for
-        weights, biases, and a large shared buffer for activations.
+        weights, biases, and two intermediate buffers for the ping-ponging.
 
         Args:
             inputs (np.ndarray): The input vector for the network.
@@ -105,8 +100,8 @@ class MLPOpenCL(MLP):
                 Expected format: {
                     'weights': [buf1, buf2,...],
                     'biases': [buf1, buf2,...],
-                    'activations_buf': single_large_buffer,
-                    'max_layer_size': int
+                    'intermediate_a': buffer,
+                    'intermediate_b': buffer
                 }
 
         Returns:
@@ -120,19 +115,17 @@ class MLPOpenCL(MLP):
         try:
             weights_bufs = cached_buffers['weights']
             biases_bufs = cached_buffers['biases']
-            activations_buf = cached_buffers['activations_buf']
-            max_layer_size = cached_buffers['max_layer_size']
+            # The two buffers for ping-ponging intermediate results
+            intermediate_buf_a = cached_buffers['intermediate_a']
+            intermediate_buf_b = cached_buffers['intermediate_b']
 
-            # 1. Copy initial input data to the start of the activations buffer on the GPU.
-            # This is the only host-to-device transfer for the entire forward pass.
-            # This call is non-blocking; the subsequent kernel launch will wait for it.
+            # 1. Copy initial input data to the first intermediate buffer on the GPU.
             input_np = np.array(inputs, dtype=np.float32).flatten()
-            cl.enqueue_copy(queue, activations_buf, input_np, is_blocking=False, device_offset=0)
+            cl.enqueue_copy(queue, intermediate_buf_a, input_np, is_blocking=False)
 
             # 2. Sequentially execute kernels for each layer, staying on the GPU.
-            # We use a "ping-pong" strategy on the offsets within the single activations buffer.
-            input_offset = 0
-            output_offset = max_layer_size
+            current_input_buf = intermediate_buf_a
+            current_output_buf = intermediate_buf_b
 
             for i in range(len(self.weights)):
                 input_size = self.layer_sizes[i]
@@ -143,20 +136,18 @@ class MLPOpenCL(MLP):
                 # Launch the kernel for the current layer.
                 forward_layer_kernel(
                     queue, (output_size,), None,
-                    activations_buf, weights_buf, biases_buf,
-                    np.int32(input_offset), np.int32(output_offset),
+                    current_input_buf, weights_buf, biases_buf, current_output_buf,
                     np.int32(input_size), np.int32(output_size)
                 )
 
-                # Swap offsets for the next layer. The previous output is the new input.
-                input_offset, output_offset = output_offset, input_offset
+                # Swap buffers for the next layer. The previous output is the new input.
+                current_input_buf, current_output_buf = current_output_buf, current_input_buf
 
             # 3. Copy the final result back from the GPU to the CPU.
-            # The final result is located at the last `input_offset`.
-            # This is the only device-to-host transfer for the entire forward pass.
+            # The final result is located in the last `current_input_buf` (due to the swap).
             output_size = self.layer_sizes[-1]
             output_np = np.empty(output_size, dtype=np.float32)
-            cl.enqueue_copy(queue, output_np, activations_buf, device_offset=input_offset).wait()
+            cl.enqueue_copy(queue, output_np, current_input_buf).wait()
 
             return output_np.reshape(1, -1)
 

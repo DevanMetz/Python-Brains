@@ -37,14 +37,16 @@ class TestMLPOpenCL:
         weights_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=w.astype(np.float32)) for w in opencl_mlp.weights]
         biases_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=b.astype(np.float32)) for b in opencl_mlp.biases]
         max_layer_size = max(opencl_mlp.layer_sizes)
-        activations_buf_size = max_layer_size * 2 * np.dtype(np.float32).itemsize
-        activations_buf = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=activations_buf_size)
+        intermediate_buf_size = max_layer_size * np.dtype(np.float32).itemsize
+        intermediate_buf_a = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=intermediate_buf_size)
+        intermediate_buf_b = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=intermediate_buf_size)
+
 
         cached_buffers = {
             'weights': weights_bufs,
             'biases': biases_bufs,
-            'activations_buf': activations_buf,
-            'max_layer_size': max_layer_size
+            'intermediate_a': intermediate_buf_a,
+            'intermediate_b': intermediate_buf_b
         }
 
         # Get the output from both MLPs
@@ -54,7 +56,8 @@ class TestMLPOpenCL:
         # Release buffers
         for buf in weights_bufs: buf.release()
         for buf in biases_bufs: buf.release()
-        activations_buf.release()
+        intermediate_buf_a.release()
+        intermediate_buf_b.release()
 
         assert np.allclose(numpy_output, opencl_output, atol=1e-6), "Optimized OpenCL MLP output does not match NumPy MLP output."
 
