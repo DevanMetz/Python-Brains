@@ -28,10 +28,6 @@ __kernel void unified_perception_kernel(
     const int map_width_tiles,
     const int tile_size,
 
-    // --- Control Flags ---
-    const int detect_circles,
-    const int detect_walls,
-
     // Output
     __global float *out_distances,
     __global int *out_indices
@@ -126,8 +122,5 @@ def opencl_unified_perception(
         p1s_buf, p2s_buf,
         world_grid_buf,
         np.int32(map_width_tiles), np.int32(tile_size),
-        # Control flags are no longer needed but still exist in the kernel signature.
-        # We pass 1 to ensure the logic runs.
-        np.int32(1), np.int32(1),
         out_distances_buf, out_indices_buf
     )

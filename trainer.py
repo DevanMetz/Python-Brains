@@ -21,7 +21,6 @@ from game import Unit, Target, Wall, Enemy
 from mlp_opencl import MLPOpenCL as MLP, OPENCL_AVAILABLE
 from map import Tile
 from quadtree import QuadTree, Rectangle
-from math_utils import iterative_line_circle_intersection
 
 # Import OpenCL functions if available
 if OPENCL_AVAILABLE:
@@ -127,100 +126,76 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     return final_inputs, whisker_debug_info
 
 
-def _rasterize_circles_on_grid(grid, objects, tile_size):
-    """Draws circle objects onto a grid for grid-based perception."""
+def _rasterize_objects_on_grid(grid, objects, tile_map):
+    """Draws objects onto a grid for grid-based perception."""
     from map import ObjectType
     for obj in objects:
-        if not hasattr(obj, 'size'): continue
+        # All objects are now 1x1 tiles
+        if 0 <= obj.grid_x < tile_map.grid_width and 0 <= obj.grid_y < tile_map.grid_height:
+            type_map = { "unit": ObjectType.UNIT, "enemy": ObjectType.ENEMY, "target": ObjectType.TARGET }
+            obj_type_val = type_map.get(obj.type)
+            if obj_type_val:
+                # Don't overwrite walls
+                if grid[obj.grid_x, obj.grid_y] == 0:
+                    grid[obj.grid_x, obj.grid_y] = obj_type_val.value
 
-        # Define a mapping from python object type string to ObjectType enum
-        type_map = {
-            "unit": ObjectType.UNIT,
-            "enemy": ObjectType.ENEMY,
-            "target": ObjectType.TARGET
-        }
-        obj_type_val = type_map.get(obj.type)
-        if not obj_type_val: continue
-
-        # Get bounding box in tile coordinates
-        min_x = int((obj.position.x - obj.size) / tile_size)
-        max_x = int((obj.position.x + obj.size) / tile_size)
-        min_y = int((obj.position.y - obj.size) / tile_size)
-        max_y = int((obj.position.y + obj.size) / tile_size)
-
-        # Iterate over the bounding box tiles
-        for gy in range(min_y, max_y + 1):
-            for gx in range(min_x, max_x + 1):
-                # Check if the tile center is within the circle's radius
-                tile_center_x = (gx + 0.5) * tile_size
-                tile_center_y = (gy + 0.5) * tile_size
-                dist_sq = (tile_center_x - obj.position.x)**2 + (tile_center_y - obj.position.y)**2
-
-                if dist_sq < obj.size**2:
-                    if 0 <= gx < grid.shape[0] and 0 <= gy < grid.shape[1]:
-                        # Don't overwrite walls
-                        if grid[gx, gy] == 0:
-                           grid[gx, gy] = obj_type_val.value
-
-def _process_perception_results(unit_data, whisker_results):
+def _process_perception_results(unit_data, whisker_results, whisker_length):
     """
     Helper to process raw whisker results for a single unit.
-    This version uses object types returned directly from the kernel.
+    This version uses object types returned directly from the kernel and
+    formats the data for the new grid-based MLP input layer.
     """
     from map import ObjectType
-    unit_pos = pygame.Vector2(unit_data['position'])
-    unit_angle = unit_data['angle']
-    num_whiskers = unit_data['num_whiskers']
-    whisker_length = unit_data['whisker_length']
-    perceivable_types = unit_data['perceivable_types']
+    num_whiskers = 8
 
-    # Map from the ObjectType enum value back to the string type
-    type_map = {
-        ObjectType.WALL.value: "wall",
-        ObjectType.UNIT.value: "unit",
-        ObjectType.ENEMY.value: "enemy",
-        ObjectType.TARGET.value: "target"
-    }
+    # Each whisker provides 2 inputs: normalized distance and object type
+    whisker_inputs = np.zeros(num_whiskers * 2, dtype=np.float32)
+    whisker_debug_info = []
 
     distances, object_types_from_kernel = whisker_results
-    whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, num_whiskers) if num_whiskers > 1 else np.array([0])
-    whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
-    whisker_debug_info = []
+
+    # Fixed 8 directions for whiskers
+    whisker_directions = [
+        (0, -1), (1, -1), (1, 0), (1, 1),
+        (0, 1), (-1, 1), (-1, 0), (-1, -1)
+    ]
 
     for i in range(num_whiskers):
         dist, obj_type_val = distances[i], object_types_from_kernel[i]
+
+        # Normalize distance: 1.0 means no object, 0.0 means object is right next to unit
+        normalized_dist = dist / whisker_length
+
+        whisker_inputs[i*2] = normalized_dist
+        whisker_inputs[i*2 + 1] = float(obj_type_val)
+
+        # --- Update debug info ---
+        start_pos = (unit_data['grid_x'], unit_data['grid_y'])
+        direction = whisker_directions[i]
+        full_end_pos = (start_pos[0] + direction[0] * whisker_length, start_pos[1] + direction[1] * whisker_length)
+
         detected_type = None
-
-        abs_angle_rad = unit_angle + whisker_angles[i]
-        start_offset = pygame.Vector2(unit_data['size'], 0).rotate(np.rad2deg(abs_angle_rad))
-        start_point = unit_pos + start_offset
-        full_end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
-        intersect_point = full_end_point
-
-        if dist != np.inf and dist <= whisker_length:
+        end_pos = full_end_pos
+        if dist != np.inf:
+            type_map = {
+                ObjectType.WALL.value: "wall", ObjectType.UNIT.value: "unit",
+                ObjectType.ENEMY.value: "enemy", ObjectType.TARGET.value: "target"
+            }
             detected_type = type_map.get(obj_type_val)
+            end_pos = (start_pos[0] + direction[0] * int(dist), start_pos[1] + direction[1] * int(dist))
 
-            if detected_type:
-                intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
-                if detected_type in perceivable_types:
-                    type_index = perceivable_types.index(detected_type)
-                    clamped_dist = max(0, min(dist, whisker_length))
-                    whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
-
-        whisker_debug_info.append({'start': (start_point.x, start_point.y), 'end': (intersect_point.x, intersect_point.y), 'full_end': (full_end_point.x, full_end_point.y), 'type': detected_type})
+        whisker_debug_info.append({'start': start_pos, 'end': end_pos, 'full_end': full_end_pos, 'type': detected_type})
 
     return whisker_inputs, whisker_debug_info
 
 
 def run_single_unit_step(unit_data, brain_id, mlp_inputs, whisker_debug_info):
-    """
-    The main worker function for processing one unit for one simulation step.
-    This version receives pre-computed MLP inputs.
-    """
+    """The main worker function. Receives MLP inputs and runs the forward pass."""
     brain = unit_data['brain']
     actions = None
     if OPENCL_AVAILABLE:
         try:
+            # The MLP OpenCL caching logic remains the same
             from mlp_opencl import context
             if brain_id not in _gpu_brain_cache:
                 weights_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=w.astype(np.float32)) for w in brain.weights]
@@ -229,10 +204,7 @@ def run_single_unit_step(unit_data, brain_id, mlp_inputs, whisker_debug_info):
                 intermediate_buf_size = max_layer_size * np.dtype(np.float32).itemsize
                 intermediate_buf_a = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=intermediate_buf_size)
                 intermediate_buf_b = cl.Buffer(context, cl.mem_flags.READ_WRITE, size=intermediate_buf_size)
-                _gpu_brain_cache[brain_id] = {
-                    'weights': weights_bufs, 'biases': biases_bufs,
-                    'intermediate_a': intermediate_buf_a, 'intermediate_b': intermediate_buf_b
-                }
+                _gpu_brain_cache[brain_id] = {'weights': weights_bufs, 'biases': biases_bufs, 'intermediate_a': intermediate_buf_a, 'intermediate_b': intermediate_buf_b}
             cached_buffers = _gpu_brain_cache[brain_id]
             actions = brain.forward(mlp_inputs, cached_buffers=cached_buffers)
         except Exception as e:
@@ -276,16 +248,22 @@ class TrainingSimulation:
     """
     Manages the genetic algorithm training process for a population of units.
     """
-    def __init__(self, population_size, world_size, tile_map, num_whiskers=7, perceivable_types=None, whisker_length=150):
+    def __init__(self, population_size, world_size, tile_map):
         self.population_size = population_size
         self.num_to_draw = population_size
         self.world_width, self.world_height = world_size
         self.tile_map = tile_map
         self.generation = 0
-        self.num_whiskers = num_whiskers
-        self.whisker_length = whisker_length
-        self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "unit"]
         self.training_mode = TrainingMode.NAVIGATE
+
+        # --- New Simplified, Fixed Architecture ---
+        self.num_whiskers = 8
+        self.whisker_length = 10 # in tiles
+        # Each whisker provides 2 inputs: distance and object type
+        num_inputs = self.num_whiskers * 2 + 2 # +2 for target vector
+        # 8 outputs for 8 directions of movement
+        num_outputs = 8
+        self.mlp_architecture = [num_inputs, 16, num_outputs]
 
         if not OPENCL_AVAILABLE:
             print("\n" + "="*60 + "\n WARNING: GPU ACCELERATION NOT AVAILABLE \n" + "="*60)
@@ -296,12 +274,17 @@ class TrainingSimulation:
         except (OSError, ImportError):
             self.pool = None
 
-        num_inputs = self.num_whiskers * len(self.perceivable_types) + 2 + 2
-        self.mlp_architecture = [num_inputs, 16, 2]
-        self.target = Target(self.world_width - 50, self.world_height / 2)
-        self.enemy = Enemy(self.world_width - 100, self.world_height / 2 + 100)
+        # Create world objects at grid positions
+        target_x = self.tile_map.grid_width - 5
+        target_y = self.tile_map.grid_height // 2
+        self.target = Target(target_x, target_y, self.tile_map)
+
+        enemy_x = self.tile_map.grid_width - 10
+        enemy_y = self.tile_map.grid_height // 2 + 5
+        self.enemy = Enemy(enemy_x, enemy_y, self.tile_map)
+
         self.world_objects = [self.target, self.enemy]
-        self.projectiles = []
+        self.projectiles = [] # This will be unused but kept for now to avoid breaking other code.
         self.population = self._create_initial_population()
         self.population_map = {unit.id: unit for unit in self.population}
         qt_boundary = Rectangle(self.world_width / 2, self.world_height / 2, self.world_width, self.world_height)
@@ -319,11 +302,6 @@ class TrainingSimulation:
         """Initializes all persistent OpenCL buffers for the simulation."""
         print("Initializing persistent OpenCL buffers...")
         if self.tile_map_buf: self.tile_map_buf.release()
-        get_tile_value = np.vectorize(lambda t: t.value)
-        int_grid = get_tile_value(self.tile_map.grid)
-        map_data = int_grid.T.flatten().astype(np.int32)
-        self.tile_map_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=map_data)
-
         if self.perception_cache:
             for buf in self.perception_cache.values(): buf.release()
 
@@ -343,9 +321,11 @@ class TrainingSimulation:
 
     def _create_initial_population(self):
         population = []
+        start_x = 5
+        start_y = self.tile_map.grid_height // 2
         for i in range(self.population_size):
             brain = MLP(self.mlp_architecture)
-            unit = Unit(id=i, x=50, y=self.world_height / 2, brain=brain, num_whiskers=self.num_whiskers, whisker_length=self.whisker_length, perceivable_types=self.perceivable_types, tile_map=self.tile_map)
+            unit = Unit(id=i, grid_x=start_x, grid_y=start_y, brain=brain, tile_map=self.tile_map, whisker_length=self.whisker_length)
             population.append(unit)
         return population
 
@@ -508,8 +488,10 @@ class TrainingSimulation:
         fitness_scores = []
         if self.training_mode == TrainingMode.NAVIGATE:
             for unit in self.population:
-                distance = unit.position.distance_to(self.target.position)
-                fitness = (self.world_width - distance) ** 2
+                # Use Manhattan distance on the grid
+                distance = abs(unit.grid_x - self.target.grid_x) + abs(unit.grid_y - self.target.grid_y)
+                max_dist = self.tile_map.grid_width + self.tile_map.grid_height
+                fitness = (max_dist - distance) ** 2
                 fitness_scores.append((unit, fitness))
         elif self.training_mode == TrainingMode.COMBAT:
             for unit in self.population:
@@ -605,38 +587,13 @@ class TrainingSimulation:
         if OPENCL_AVAILABLE:
             self._init_gpu_buffers()
 
-    def rebuild_with_new_architecture(self, new_arch, num_whiskers, perceivable_types, whisker_length):
-        """Resets the entire simulation with a new unit brain configuration.
-
-        This method is called when the user designs a new AI in the UI. It
-        replaces the current population with a brand new, randomly initialized
-        one based on the specified architecture.
-
-        Args:
-            new_arch (list[int]): The MLP layer sizes for the new brains.
-            num_whiskers (int): The number of whiskers for the new units.
-            perceivable_types (list[str]): The object types the new units can see.
-            whisker_length (int): The whisker length for the new units.
-        """
-        print(f"Creating new population with arch: {new_arch}, {num_whiskers} whiskers, {whisker_length} length, sensing: {perceivable_types}")
-        self.mlp_architecture = new_arch
-        self.num_whiskers = num_whiskers
-        self.perceivable_types = perceivable_types
-        self.whisker_length = whisker_length
+    def reset_simulation(self):
+        """Resets the simulation to its initial state."""
         self.population = self._create_initial_population()
         self.population_map = {unit.id: unit for unit in self.population}
-        self.projectiles = []
-        self.enemy.health = 100
-        for unit in self.population:
-            unit.damage_dealt = 0
         self.generation = 0
-
         # Clear the GPU cache in the worker processes, as the old brains are now gone.
         self.clear_worker_caches()
-
-        # Re-initialize GPU buffers with new sizes
-        if OPENCL_AVAILABLE:
-            self._init_gpu_buffers()
 
     def set_population_size(self, new_size):
         """Updates the population size and resets the simulation.
@@ -695,47 +652,21 @@ class TrainingSimulation:
         fittest_unit = fitness_scores[0][0]
 
         os.makedirs(os.path.dirname(filepath_prefix), exist_ok=True)
-        arch_data = {
-            "layer_sizes": fittest_unit.brain.layer_sizes,
-            "num_whiskers": fittest_unit.num_whiskers,
-            "whisker_length": fittest_unit.whisker_length,
-            "perceivable_types": fittest_unit.perceivable_types
-        }
-        json_path = f"{filepath_prefix}_arch.json"
-        with open(json_path, 'w') as f:
-            json.dump(arch_data, f, indent=4)
-
+        # Architecture is now fixed, so we only need to save weights.
         weights_path = f"{filepath_prefix}_weights.npz"
         np.savez(weights_path, *fittest_unit.brain.weights, *fittest_unit.brain.biases)
-        print(f"Saved fittest brain to {json_path} and {weights_path}")
+        print(f"Saved fittest brain to {weights_path}")
 
     def load_brain_from_file(self, filepath_prefix="saved_brains/brain"):
-        """Loads a brain from files and replaces the current population with it.
-
-        Reads a saved brain's architecture (`.json`) and weights (`.npz`),
-        then rebuilds the entire population. Each unit in the new population
-        receives a clone of the loaded brain.
-
-        Args:
-            filepath_prefix (str, optional): The base path and filename for the
-                brain files to load. Defaults to "saved_brains/brain".
-        """
-        json_path = f"{filepath_prefix}_arch.json"
+        """Loads a brain's weights and replaces the current population with it."""
         weights_path = f"{filepath_prefix}_weights.npz"
 
-        if not os.path.exists(json_path) or not os.path.exists(weights_path):
-            print(f"Error: Brain files not found at {filepath_prefix}")
+        if not os.path.exists(weights_path):
+            print(f"Error: Brain weights file not found at {weights_path}")
             return
 
-        with open(json_path, 'r') as f:
-            arch_data = json.load(f)
-
-        layer_sizes = arch_data["layer_sizes"]
-        num_whiskers = arch_data["num_whiskers"]
-        perceivable_types = arch_data.get("perceivable_types", ["wall", "enemy", "unit"])
-        whisker_length = arch_data.get("whisker_length", 150)
-
-        loaded_brain = MLP(layer_sizes)
+        # Create a new brain with the fixed architecture
+        loaded_brain = MLP(self.mlp_architecture)
         with np.load(weights_path) as data:
             num_weight_matrices = len(loaded_brain.weights)
             for i in range(num_weight_matrices):
@@ -743,20 +674,16 @@ class TrainingSimulation:
             for i in range(len(loaded_brain.biases)):
                 loaded_brain.biases[i] = data[f'arr_{i + num_weight_matrices}']
 
-        self.rebuild_with_new_architecture(layer_sizes, num_whiskers, perceivable_types, whisker_length)
-
         # Create a new population where each unit gets a clone of the loaded brain
         new_population = []
+        start_x = 5
+        start_y = self.tile_map.grid_height // 2
         for i in range(self.population_size):
-            new_unit = Unit(
-                id=i, x=50, y=self.world_height / 2, brain=loaded_brain.clone(),
-                num_whiskers=self.num_whiskers,
-                whisker_length=self.whisker_length,
-                perceivable_types=self.perceivable_types,
-                tile_map=self.tile_map
-            )
-            new_population.append(new_unit)
+            unit = Unit(id=i, grid_x=start_x, grid_y=start_y, brain=loaded_brain.clone(), tile_map=self.tile_map, whisker_length=self.whisker_length)
+            new_population.append(unit)
+
         self.population = new_population
         self.population_map = {unit.id: unit for unit in self.population}
-
-        print(f"Loaded brain from {filepath_prefix} and rebuilt population.")
+        self.generation = 0
+        self.clear_worker_caches()
+        print(f"Loaded brain from {weights_path} and rebuilt population.")

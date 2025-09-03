@@ -121,13 +121,7 @@ def main():
                     trainer.target.position.y = my
 
             if event.type == pygame_gui.UI_HORIZONTAL_SLIDER_MOVED:
-                if event.ui_element == design_menu.whisker_slider:
-                    num_whiskers = int(event.value)
-                    design_menu.whisker_count_label.set_text(str(num_whiskers))
-                elif event.ui_element == design_menu.whisker_length_slider:
-                    length = int(event.value)
-                    design_menu.whisker_length_value_label.set_text(str(length))
-                elif event.ui_element == simulation_ui.pop_size_slider:
+                if event.ui_element == simulation_ui.pop_size_slider:
                     population_size = int(event.value)
                     simulation_ui.pop_size_value_label.set_text(str(population_size))
                     simulation_ui.update_drawn_units_range(population_size)
@@ -150,19 +144,10 @@ def main():
                 elif event.ui_element == simulation_ui.back_to_sim_button:
                     trainer.rebuild_pool() # Rebuild pool with new map data
                     current_state = GameState.SIMULATION
-                elif event.ui_element == design_menu.update_button:
-                    num_whiskers = int(design_menu.whisker_slider.get_current_value())
-                    whisker_length = int(design_menu.whisker_length_slider.get_current_value())
-                    attack_enabled = design_menu.attack_checkbox.is_checked
-                    perceivable_types = design_menu.get_perceivable_types()
-                    # whiskers * types + velocity + angle + target_dx + target_dy
-                    num_inputs = num_whiskers * len(perceivable_types) + 2 + 2
-                    num_outputs = 3 if attack_enabled else 2
-                    new_arch = design_menu.get_architecture_from_input(input_nodes=num_inputs, output_nodes=num_outputs)
-                    if new_arch:
-                        trainer.rebuild_with_new_architecture(new_arch, num_whiskers, perceivable_types, whisker_length)
-                        best_fitness = 0
-                        current_state = GameState.SIMULATION
+                elif event.ui_element == design_menu.reset_button:
+                    trainer.reset_simulation()
+                    best_fitness = 0
+                    current_state = GameState.SIMULATION
                 elif event.ui_element == design_menu.close_button:
                     current_state = GameState.SIMULATION
                 elif event.ui_element == simulation_ui.save_brain_button:
