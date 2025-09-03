@@ -12,29 +12,27 @@ class TrainingSimulation:
     """
     Manages the genetic algorithm training process.
     """
-    def __init__(self, population_size=50, world_size=(800, 600), num_whiskers=7, perceivable_types=None):
+    def __init__(self, population_size, world_size, tile_map, num_whiskers=7, perceivable_types=None, whisker_length=150):
         self.population_size = population_size
         self.world_width, self.world_height = world_size
+        self.tile_map = tile_map
         self.generation = 0
         self.num_whiskers = num_whiskers
+        self.whisker_length = whisker_length
         self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "unit"]
         self.training_mode = TrainingMode.NAVIGATE
 
         # Define the MLP architecture
-        # The number of inputs depends on the number of whiskers and perceivable types
-        num_inputs = self.num_whiskers * len(self.perceivable_types) + 2 # whiskers * types + velocity + angle
+        # The number of inputs depends on whiskers, perceivable types, and now the target vector
+        # whiskers * types + velocity + angle + target_dx + target_dy
+        num_inputs = self.num_whiskers * len(self.perceivable_types) + 2 + 2
         self.mlp_architecture = [num_inputs, 16, 2]
 
-        # Create world objects
+        # Create world objects (dynamic objects, walls are handled by the map)
         self.target = Target(self.world_width - 50, self.world_height / 2)
-        self.enemy = Enemy(self.world_width - 100, self.world_height / 2 + 100) # Add an enemy
+        self.enemy = Enemy(self.world_width - 100, self.world_height / 2 + 100)
         self.world_objects = [self.target, self.enemy]
         self.projectiles = []
-        # Add some boundary walls
-        self.world_objects.append(Wall(0, 0, self.world_width, 10)) # Top
-        self.world_objects.append(Wall(0, self.world_height - 10, self.world_width, 10)) # Bottom
-        self.world_objects.append(Wall(0, 0, 10, self.world_height)) # Left
-        self.world_objects.append(Wall(self.world_width - 10, 0, 10, self.world_height)) # Right
 
         # Create the initial population
         self.population = self._create_initial_population()
@@ -45,7 +43,10 @@ class TrainingSimulation:
             brain = MLP(self.mlp_architecture)
             unit = Unit(
                 x=50, y=self.world_height / 2, brain=brain,
-                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types
+                num_whiskers=self.num_whiskers,
+                whisker_length=self.whisker_length,
+                perceivable_types=self.perceivable_types,
+                tile_map=self.tile_map
             )
             population.append(unit)
         return population
@@ -56,7 +57,7 @@ class TrainingSimulation:
         """
         # Update units
         for unit in self.population:
-            inputs = unit.get_inputs(self.world_objects)
+            inputs = unit.get_inputs(self.world_objects, self.target)
             actions = unit.brain.forward(inputs)
             unit.update(actions, self.projectiles)
             unit.position.x = np.clip(unit.position.x, 0, self.world_width)
@@ -110,8 +111,12 @@ class TrainingSimulation:
         num_elites = int(self.population_size * elitism_frac)
         elite_units = [item[0] for item in fitness_scores[:num_elites]]
         for elite_unit in elite_units:
-            # Create a new unit instance but keep the brain
-            new_unit = Unit(x=50, y=self.world_height / 2, brain=elite_unit.brain)
+            # Create a new unit instance but keep the brain and configuration
+            new_unit = Unit(
+                x=50, y=self.world_height / 2, brain=elite_unit.brain,
+                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types,
+                whisker_length=self.whisker_length, tile_map=self.tile_map
+            )
             new_population.append(new_unit)
 
         # Crossover and Mutation
@@ -127,7 +132,11 @@ class TrainingSimulation:
             child_brain.mutate(mutation_rate=mutation_rate)
 
             # Add new unit with the child's brain to the population
-            new_unit = Unit(x=50, y=self.world_height / 2, brain=child_brain)
+            new_unit = Unit(
+                x=50, y=self.world_height / 2, brain=child_brain,
+                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types,
+                whisker_length=self.whisker_length, tile_map=self.tile_map
+            )
             new_population.append(new_unit)
 
         self.population = new_population
@@ -136,14 +145,15 @@ class TrainingSimulation:
         # Return best fitness for logging
         return fitness_scores[0][1]
 
-    def rebuild_with_new_architecture(self, new_arch, num_whiskers, perceivable_types):
+    def rebuild_with_new_architecture(self, new_arch, num_whiskers, perceivable_types, whisker_length):
         """
         Re-initializes the simulation with a new MLP architecture and I/O config.
         """
-        print(f"Creating new population with arch: {new_arch}, {num_whiskers} whiskers, sensing: {perceivable_types}")
+        print(f"Creating new population with arch: {new_arch}, {num_whiskers} whiskers, {whisker_length} length, sensing: {perceivable_types}")
         self.mlp_architecture = new_arch
         self.num_whiskers = num_whiskers
         self.perceivable_types = perceivable_types
+        self.whisker_length = whisker_length
         self.population = self._create_initial_population()
         self.projectiles = [] # Clear projectiles
         self.enemy.health = 100 # Reset enemy health
@@ -153,16 +163,31 @@ class TrainingSimulation:
 
     def save_fittest_brain(self, filepath_prefix="saved_brains/brain"):
         """
-        Saves the architecture and weights of the fittest brain in the population.
+        Saves the architecture and weights of the fittest brain in the population,
+        using the correct fitness function for the current training mode.
         """
-        # Find the fittest unit
+        # Find the fittest unit by calculating fitness based on the current mode
         fitness_scores = []
-        for unit in self.population:
-            distance = unit.position.distance_to(self.target.position)
-            fitness = (self.world_width - distance) ** 2
-            fitness_scores.append((unit, fitness))
+        if self.training_mode == TrainingMode.NAVIGATE:
+            for unit in self.population:
+                distance = unit.position.distance_to(self.target.position)
+                fitness = (self.world_width - distance) ** 2
+                fitness_scores.append((unit, fitness))
+        elif self.training_mode == TrainingMode.COMBAT:
+            for unit in self.population:
+                distance = unit.position.distance_to(self.enemy.position)
+                fitness = unit.damage_dealt * 100 + (self.world_width - distance)
+                fitness_scores.append((unit, fitness))
+
+        if not fitness_scores:
+            print("Warning: Could not determine fittest brain. No units or fitness scores.")
+            return
+
         fitness_scores.sort(key=lambda x: x[1], reverse=True)
         fittest_unit = fitness_scores[0][0]
+
+        # Ensure the save directory exists
+        os.makedirs(os.path.dirname(filepath_prefix), exist_ok=True)
 
         # Save architecture to JSON
         arch_data = {

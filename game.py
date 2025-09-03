@@ -2,12 +2,15 @@ import numpy as np
 import pygame
 from mlp import MLP
 
+from map import Tile
+
 class Unit:
     """
     Represents a single unit in the game, controlled by an MLP brain.
     """
-    def __init__(self, x, y, brain=None, num_whiskers=7, perceivable_types=None):
+    def __init__(self, x, y, tile_map, brain=None, num_whiskers=7, whisker_length=150, perceivable_types=None):
         self.position = pygame.Vector2(x, y)
+        self.tile_map = tile_map
         self.angle = np.random.uniform(0, 2 * np.pi) # Facing direction in radians
         self.velocity = pygame.Vector2(0, 0)
         self.size = 10 # Radius for drawing and collision
@@ -18,6 +21,7 @@ class Unit:
 
         self.brain = brain
         self.num_whiskers = num_whiskers
+        self.whisker_length = whisker_length
         self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "target", "unit"]
 
         self.attack_cooldown = 0
@@ -27,15 +31,14 @@ class Unit:
             self.whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, self.num_whiskers)
         else:
             self.whisker_angles = np.array([0]) # Single whisker facing forward
-        self.whisker_length = 150
+        self.whisker_debug_info = [] # To store data for drawing
 
-    def get_inputs(self, world_objects):
+    def get_inputs(self, world_objects, target):
         """
-        Calculates inputs for the MLP brain using typed whisker perception.
-        For each whisker, it generates an input for each perceivable object type.
+        Calculates inputs for the MLP brain, including whisker data and target vector.
         """
+        self.whisker_debug_info = []
         num_perceivables = len(self.perceivable_types)
-        # Create a matrix for whisker inputs: rows=whiskers, cols=perceivable_types
         whisker_inputs = np.zeros((self.num_whiskers, num_perceivables))
 
         for i, whisker_angle in enumerate(self.whisker_angles):
@@ -45,67 +48,112 @@ class Unit:
 
             closest_dist = self.whisker_length
             detected_type = None
+            closest_intersect_point = end_point
 
-            # Find the closest object intersected by this whisker
+            # --- Detect Walls from TileMap using DDA algorithm ---
+            if "wall" in self.perceivable_types:
+                dx = end_point.x - start_point.x
+                dy = end_point.y - start_point.y
+
+                steps = max(abs(dx), abs(dy))
+                if steps > 0:
+                    x_inc = dx / steps
+                    y_inc = dy / steps
+
+                    x, y = start_point.x, start_point.y
+                    for _ in range(int(steps)):
+                        if self.tile_map.get_tile_at_pixel(x, y) == Tile.WALL:
+                            check_point = pygame.Vector2(x, y)
+                            closest_dist = self.position.distance_to(check_point)
+                            detected_type = "wall"
+                            closest_intersect_point = check_point
+                            break
+                        x += x_inc
+                        y += y_inc
+
+            # --- Detect other objects (enemies, targets, etc.) ---
             for obj in world_objects:
                 if obj is self:
                     continue
-
-                dist = self.whisker_length + 1
-                if isinstance(obj, Wall):
-                    points = [
-                        (obj.rect.left, obj.rect.top), (obj.rect.right, obj.rect.top),
-                        (obj.rect.right, obj.rect.bottom), (obj.rect.left, obj.rect.bottom)
-                    ]
-                    for j in range(4):
-                        p1, p2 = points[j], points[(j + 1) % 4]
-                        intersect_point = line_intersection(start_point, end_point, p1, p2)
-                        if intersect_point:
-                            dist = self.position.distance_to(intersect_point)
-                elif hasattr(obj, 'position'): # Circle-based objects
-                    intersect_dist = line_circle_intersection(start_point, end_point, obj.position, obj.size)
-                    if intersect_dist is not None:
-                        dist = intersect_dist
-
-                if dist < closest_dist:
+                dist = line_circle_intersection(start_point, end_point, obj.position, obj.size)
+                if dist is not None and dist < closest_dist:
                     closest_dist = dist
                     detected_type = obj.type
+                    closest_intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle))
 
-            # If an object was detected, update the corresponding input neuron
+
+            self.whisker_debug_info.append({
+                'start': start_point, 'end': closest_intersect_point,
+                'full_end': end_point, 'type': detected_type
+            })
+
             if detected_type and detected_type in self.perceivable_types:
                 type_index = self.perceivable_types.index(detected_type)
                 whisker_inputs[i, type_index] = 1.0 - (closest_dist / self.whisker_length)
 
-        # Flatten the whisker inputs and add other state info
+        # --- Calculate relative target vector ---
+        relative_vec = target.position - self.position
+        # Rotate vector to be relative to the unit's orientation
+        relative_vec = relative_vec.rotate(-np.rad2deg(self.angle))
+        # Normalize
+        norm_dx = relative_vec.x / self.tile_map.pixel_width
+        norm_dy = relative_vec.y / self.tile_map.pixel_height
+        target_inputs = np.array([norm_dx, norm_dy])
+
+        # --- Concatenate all inputs ---
         flat_whisker_inputs = whisker_inputs.flatten()
         other_inputs = np.array([self.velocity.length() / self.speed, self.angle / (2 * np.pi)])
-
-        return np.concatenate((flat_whisker_inputs, other_inputs))
+        return np.concatenate((flat_whisker_inputs, other_inputs, target_inputs))
 
     def attack(self):
         """Creates and returns a new projectile if cooldown is over."""
         if self.attack_cooldown <= 0:
             self.attack_cooldown = self.max_cooldown
-            return Projectile(self.position.x, self.position.y, self.angle)
+            return Projectile(self.position.x, self.position.y, self.angle, self)
         return None
+
+    def _check_wall_collision(self, position):
+        """Checks if a position collides with a wall tile."""
+        # Check the four corners of the unit's bounding box
+        points_to_check = [
+            (position.x - self.size, position.y - self.size),
+            (position.x + self.size, position.y - self.size),
+            (position.x - self.size, position.y + self.size),
+            (position.x + self.size, position.y + self.size),
+        ]
+        for p in points_to_check:
+            if self.tile_map.get_tile_at_pixel(p[0], p[1]) == Tile.WALL:
+                return True
+        return False
 
     def update(self, actions, world_projectiles):
         """
-        Updates the unit's state based on the MLP's output actions.
+        Updates the unit's state based on MLP actions, including wall collision and sliding.
         """
         if self.attack_cooldown > 0:
             self.attack_cooldown -= 1
 
-        # Actions are expected to be in the range [-1, 1] from the tanh activation
+        # --- Calculate movement from MLP actions ---
         turn_action = actions[0][0]
         move_action = actions[0][1]
-
         self.angle += turn_action * 0.1
         forward_speed = max(0, move_action) * self.speed
         self.velocity = pygame.Vector2(forward_speed, 0).rotate(np.rad2deg(self.angle))
-        self.position += self.velocity
 
-        # Handle attack action if it exists
+        # --- Handle collision and sliding ---
+        # Move on x-axis
+        new_pos_x = self.position.copy()
+        new_pos_x.x += self.velocity.x
+        if not self._check_wall_collision(new_pos_x):
+            self.position.x = new_pos_x.x
+
+        # Move on y-axis
+        new_pos_y = self.position.copy()
+        new_pos_y.y += self.velocity.y
+        if not self._check_wall_collision(new_pos_y):
+            self.position.y = new_pos_y.y
+
+        # --- Handle attack action ---
         if len(actions[0]) > 2:
             attack_action = actions[0][2]
             if attack_action > 0.5: # Threshold to fire
@@ -114,10 +162,30 @@ class Unit:
                     world_projectiles.append(projectile)
 
     def draw(self, screen):
-        # Draw body
+        # --- Draw whiskers first, so they are behind the unit ---
+        WHISKER_COLOR = (100, 100, 100) # Faint gray for max range
+        HIT_COLORS = {
+            "wall": (200, 200, 200), # White
+            "enemy": (255, 100, 100), # Light Red
+            "unit": (100, 100, 255), # Light Blue
+            "target": (100, 255, 100), # Light Green
+        }
+
+        for info in self.whisker_debug_info:
+            # Draw the full length whisker faintly
+            pygame.draw.line(screen, WHISKER_COLOR, info['start'], info['full_end'], 1)
+
+            # If there was a hit, draw the collision line more brightly
+            if info['type']:
+                hit_color = HIT_COLORS.get(info['type'], (255, 255, 255)) # Default to bright white
+                pygame.draw.line(screen, hit_color, info['start'], info['end'], 2)
+                pygame.draw.circle(screen, hit_color, (int(info['end'].x), int(info['end'].y)), 3)
+
+
+        # --- Draw unit body ---
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
 
-        # Draw direction indicator
+        # --- Draw direction indicator ---
         end_pos = self.position + pygame.Vector2(self.size, 0).rotate(np.rad2deg(self.angle))
         pygame.draw.line(screen, (255, 0, 0), self.position, end_pos, 2)
 

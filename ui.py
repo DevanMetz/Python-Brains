@@ -47,9 +47,29 @@ class DesignMenu:
             container=self.panel
         )
 
+        self.whisker_length_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, 140), (180, 25)),
+            text='Whisker Length:',
+            manager=ui_manager,
+            container=self.panel
+        )
+        self.whisker_length_value_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((240, 140), (50, 25)),
+            text='150',
+            manager=ui_manager,
+            container=self.panel
+        )
+        self.whisker_length_slider = pygame_gui.elements.UIHorizontalSlider(
+            relative_rect=pygame.Rect((10, 170), (280, 20)),
+            start_value=150,
+            value_range=(50, 250),
+            manager=ui_manager,
+            container=self.panel
+        )
+
         # --- UI Elements for Outputs ---
         self.attack_checkbox = pygame_gui.elements.UICheckBox(
-            relative_rect=pygame.Rect((10, 140), (280, 25)),
+            relative_rect=pygame.Rect((10, 200), (280, 25)),
             text="Enable Attack Action",
             manager=ui_manager,
             container=self.panel
@@ -57,30 +77,30 @@ class DesignMenu:
 
         # --- UI Elements for Perception Types ---
         self.sense_wall_checkbox = pygame_gui.elements.UICheckBox(
-            relative_rect=pygame.Rect((10, 170), (140, 25)), text="Sense Walls", manager=ui_manager, container=self.panel)
+            relative_rect=pygame.Rect((10, 230), (140, 25)), text="Sense Walls", manager=ui_manager, container=self.panel)
         self.sense_wall_checkbox.checked = True
         self.sense_enemy_checkbox = pygame_gui.elements.UICheckBox(
-            relative_rect=pygame.Rect((150, 170), (140, 25)), text="Sense Enemies", manager=ui_manager, container=self.panel)
+            relative_rect=pygame.Rect((150, 230), (140, 25)), text="Sense Enemies", manager=ui_manager, container=self.panel)
         self.sense_enemy_checkbox.checked = True
         self.sense_unit_checkbox = pygame_gui.elements.UICheckBox(
-            relative_rect=pygame.Rect((10, 200), (140, 25)), text="Sense Friendlies", manager=ui_manager, container=self.panel)
+            relative_rect=pygame.Rect((10, 260), (140, 25)), text="Sense Friendlies", manager=ui_manager, container=self.panel)
         self.sense_unit_checkbox.checked = True
 
         # --- Action Buttons ---
         self.update_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((10, 230), (280, 40)),
+            relative_rect=pygame.Rect((10, 290), (280, 40)),
             text='Create New Population',
             manager=ui_manager,
             container=self.panel
         )
         self.load_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((10, 280), (280, 40)),
+            relative_rect=pygame.Rect((10, 340), (280, 40)),
             text='Load Last Saved Brain',
             manager=ui_manager,
             container=self.panel
         )
         self.close_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((10, 330), (280, 40)),
+            relative_rect=pygame.Rect((10, 390), (280, 40)),
             text='Close',
             manager=ui_manager,
             container=self.panel
