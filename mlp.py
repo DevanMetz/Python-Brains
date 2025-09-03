@@ -102,8 +102,8 @@ class MLP:
 
         return current_layer_output
 
-    @staticmethod
-    def crossover(parent1, parent2):
+    @classmethod
+    def crossover(cls, parent1, parent2):
         """Creates a new child MLP by crossing over two parent MLPs.
 
         This method implements a simple single-point crossover for each weight
@@ -111,7 +111,12 @@ class MLP:
         chosen, and the child's parameters are created by taking the first
         part from `parent1` and the second part from `parent2`.
 
+        This is a classmethod, so it will create a child of the same class
+        as the parents (e.g., `MLPOpenCL.crossover` will produce an `MLPOpenCL`
+        instance).
+
         Args:
+            cls (type): The class to use for creating the child instance.
             parent1 (MLP): The first parent MLP.
             parent2 (MLP): The second parent MLP.
 
@@ -124,7 +129,7 @@ class MLP:
         if parent1.layer_sizes != parent2.layer_sizes:
             raise ValueError("Parents must have the same layer sizes for crossover.")
 
-        child = MLP(parent1.layer_sizes)
+        child = cls(parent1.layer_sizes)
 
         # Crossover weights
         for i in range(len(parent1.weights)):
@@ -154,7 +159,9 @@ class MLP:
         Returns:
             MLP: A new MLP instance with identical weights and biases.
         """
-        cloned_mlp = MLP(self.layer_sizes)
+        # Use self.__class__ to ensure the clone is of the same subclass
+        # (e.g., MLPOpenCL) as the instance being cloned.
+        cloned_mlp = self.__class__(self.layer_sizes)
         cloned_mlp.weights = [w.copy() for w in self.weights]
         cloned_mlp.biases = [b.copy() for b in self.biases]
         return cloned_mlp

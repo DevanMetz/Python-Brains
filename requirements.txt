@@ -1,4 +1,17 @@
 pygame-ce
 numpy
 pygame-gui
-cupy-cuda11x
+pyopencl
+
+# Optional GPU Acceleration with CuPy
+# -----------------------------------
+# To enable GPU acceleration, you must install the correct CuPy package for your system.
+# Please follow the official CuPy installation guide: https://docs.cupy.dev/en/stable/install.html
+#
+# For NVIDIA GPUs (CUDA):
+# Find your CUDA toolkit version and install the corresponding package. For example, for CUDA 11.x:
+# pip install cupy-cuda11x
+#
+# For AMD GPUs (ROCm):
+# Find your ROCm version and install the corresponding package. For example, for ROCm 5.7:
+# pip install cupy-rocm-5-7

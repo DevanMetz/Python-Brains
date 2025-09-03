@@ -18,27 +18,36 @@ import pygame
 from functools import partial
 from multiprocessing import Pool, cpu_count
 from game import Unit, Target, Wall, Enemy
-from mlp_cupy import MLPCupy as MLP
+from mlp_opencl import MLPOpenCL as MLP, OPENCL_AVAILABLE
 from map import Tile
 from quadtree import QuadTree, Rectangle
+from math_utils import iterative_line_circle_intersection
+
+# Import OpenCL functions if available
+if OPENCL_AVAILABLE:
+    import pyopencl as cl
+    from math_utils_opencl import opencl_vectorized_line_circle_intersection
 
 # --- Worker Function for Multiprocessing ---
 
 _tile_map_global = None
+_gpu_brain_cache = {}
 
 def init_worker(tile_map):
     """Initializer for each worker process in the multiprocessing pool.
 
-    This function makes the provided `tile_map` a global variable within the
-    worker's scope. This is an optimization to avoid serializing and sending
-    the large tile map data with every task, as it's read-only and shared
-    by all workers.
+    This function sets up global variables within the worker's scope.
+    This is an optimization to avoid serializing and sending large, static
+    data with every task.
 
     Args:
         tile_map (TileMap): The global tile map for the simulation.
     """
-    global _tile_map_global
+    global _tile_map_global, _gpu_brain_cache
     _tile_map_global = tile_map
+    # The brain cache is also made global to persist across tasks within
+    # the same worker process. It stores GPU-resident copies of brain weights.
+    _gpu_brain_cache = {}
 
 
 def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
@@ -88,90 +97,83 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
     whisker_debug_info = []
 
-    try:
-        # Use CuPy for vectorized calculations if available
-        import cupy as cp
-        from math_utils import vectorized_line_circle_intersection
-        xp = cp
+    # Use the OPENCL_AVAILABLE flag to choose the execution path.
+    if OPENCL_AVAILABLE:
+        try:
+            # --- GPU-accelerated vectorized path (OpenCL) ---
+            abs_angles = unit_angle + whisker_angles
 
-        # --- Prepare whisker data ---
-        abs_angles = unit_angle + whisker_angles
+            # Prepare whisker start and end points as NumPy arrays
+            start_points_np = np.tile(unit_pos, (num_whiskers, 1))
+            end_vectors_np = np.column_stack([
+                np.cos(abs_angles) * whisker_length,
+                np.sin(abs_angles) * whisker_length
+            ])
+            end_points_np = start_points_np + end_vectors_np
 
-        # --- Vectorized whisker-object intersection ---
-        if local_objects_data:
-            start_points_gpu = xp.asarray(unit_pos.xy).reshape(1, 2)
-            whisker_end_vectors = xp.stack([
-                xp.cos(xp.asarray(abs_angles)) * whisker_length,
-                xp.sin(xp.asarray(abs_angles)) * whisker_length
-            ], axis=1)
-            end_points_gpu = start_points_gpu + whisker_end_vectors
+            # Prepare circle data as NumPy arrays
+            if local_objects_data:
+                centers_np = np.array([d['position'] for d in local_objects_data], dtype=np.float32)
+                radii_np = np.array([d['size'] for d in local_objects_data], dtype=np.float32)
+            else:
+                centers_np = np.empty((0, 2), dtype=np.float32)
+                radii_np = np.empty(0, dtype=np.float32)
 
-            centers_gpu = xp.asarray([d['position'] for d in local_objects_data])
-            radii_gpu = xp.asarray([d['size'] for d in local_objects_data])
+            # Call the OpenCL kernel wrapper
+            obj_distances, obj_indices = opencl_vectorized_line_circle_intersection(
+                start_points_np, end_points_np, centers_np, radii_np
+            )
 
-            obj_distances, obj_indices = vectorized_line_circle_intersection(
-                start_points_gpu, end_points_gpu, centers_gpu, radii_gpu, xp)
-        else:
-            obj_distances = xp.full(num_whiskers, xp.inf)
-            obj_indices = xp.full(num_whiskers, -1, dtype=xp.int32)
+            # --- Wall detection (remains on CPU as it's iterative and complex to vectorize) ---
+            wall_distances = np.full(num_whiskers, np.inf, dtype=np.float32)
+            if "wall" in perceivable_types:
+                for i, whisker_angle in enumerate(whisker_angles):
+                    # This logic is duplicated from the fallback path for simplicity
+                    abs_angle_rad = unit_angle + whisker_angle
+                    start_point = unit_pos
+                    end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
+                    dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
+                    steps = int(max(abs(dx), abs(dy)))
+                    if steps > 0:
+                        x_inc, y_inc = dx / steps, dy / steps
+                        for j in range(steps):
+                            x, y = start_point.x + j * x_inc, start_point.y + j * y_inc
+                            if _tile_map_global.get_tile_at_pixel(x, y) == Tile.WALL:
+                                wall_distances[i] = unit_pos.distance_to(pygame.Vector2(x, y))
+                                break
 
-        # --- Wall detection (iterative) ---
-        wall_distances = np.full(num_whiskers, np.inf)
-        if "wall" in perceivable_types:
-            # This loop is structured to be identical to the fallback logic
-            # to prevent subtle bugs.
-            for i, whisker_angle in enumerate(whisker_angles):
-                abs_angle = unit_angle + whisker_angle
+            # --- Combine GPU (object) and CPU (wall) results ---
+            final_distances = np.where(obj_distances < wall_distances, obj_distances, wall_distances)
+            final_indices = np.where(obj_distances < wall_distances, obj_indices, -2) # -2 for wall
+
+            # --- Final processing to generate inputs and debug info ---
+            object_types = [d['type'] for d in local_objects_data]
+            for i in range(num_whiskers):
+                dist, idx = final_distances[i], final_indices[i]
+                detected_type = None
+                abs_angle_rad = unit_angle + whisker_angles[i]
                 start_point = unit_pos
-                end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle))
-                dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
-                steps = int(max(abs(dx), abs(dy)))
-                if steps > 0:
-                    x_inc, y_inc = dx / steps, dy / steps
-                    for j in range(steps):
-                        x = start_point.x + j * x_inc
-                        y = start_point.y + j * y_inc
-                        if _tile_map_global.get_tile_at_pixel(x, y) == Tile.WALL:
-                            wall_distances[i] = unit_pos.distance_to(pygame.Vector2(x, y))
-                            break
+                full_end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
+                intersect_point = full_end_point
 
-        # --- Combine results ---
-        wall_distances_gpu = xp.asarray(wall_distances)
-        obj_hit_is_closer = obj_distances < wall_distances_gpu
+                if dist != np.inf:
+                    detected_type = "wall" if idx == -2 else object_types[idx]
+                    intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
+                    if detected_type and detected_type in perceivable_types:
+                        type_index = perceivable_types.index(detected_type)
+                        clamped_dist = max(0, min(dist, whisker_length))
+                        whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
 
-        final_distances = xp.asnumpy(xp.where(obj_hit_is_closer, obj_distances, wall_distances_gpu))
-        final_indices = xp.asnumpy(xp.where(obj_hit_is_closer, obj_indices, -2)) # -2 for wall
+                whisker_debug_info.append({'start': (start_point.x, start_point.y), 'end': (intersect_point.x, intersect_point.y), 'full_end': (full_end_point.x, full_end_point.y), 'type': detected_type})
 
-        # --- Final processing on CPU to generate inputs and debug info ---
-        object_types = [d['type'] for d in local_objects_data]
-        for i in range(num_whiskers):
-            dist = final_distances[i]
-            idx = final_indices[i]
-            detected_type = None
+        except Exception as e:
+            print(f"Warning: OpenCL-based perception failed with error: {e}. Falling back to CPU.")
+            # This will cause the next check to fail and use the CPU path for this unit.
+            # We do NOT assign to OPENCL_AVAILABLE here to avoid the UnboundLocalError.
+            pass
 
-            abs_angle_rad = unit_angle + whisker_angles[i]
-            start_point = unit_pos
-            full_end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
-            intersect_point = full_end_point
-
-            if dist != np.inf:
-                detected_type = "wall" if idx == -2 else object_types[idx]
-                intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
-                if detected_type and detected_type in perceivable_types:
-                    type_index = perceivable_types.index(detected_type)
-                    clamped_dist = max(0, min(dist, whisker_length))
-                    whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
-
-            whisker_debug_info.append({
-                'start': (start_point.x, start_point.y),
-                'end': (intersect_point.x, intersect_point.y),
-                'full_end': (full_end_point.x, full_end_point.y),
-                'type': detected_type
-            })
-
-    except Exception:
+    if not OPENCL_AVAILABLE:
         # --- Fallback to original iterative method ---
-        from math_utils import iterative_line_circle_intersection
         for i, whisker_angle in enumerate(whisker_angles):
             abs_angle = unit_angle + whisker_angle
             start_point = unit_pos
@@ -254,13 +256,60 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data):
     )
 
     brain = unit_data['brain']
-    actions = brain.forward(inputs)
+
+    # --- Optimized MLP Forward Pass with OpenCL Caching ---
+    actions = None
+    if OPENCL_AVAILABLE:
+        try:
+            from mlp_opencl import context # Get the worker's context
+
+            # Use the memory address of the weights array as a unique ID.
+            brain_id = brain.weights[0].ctypes.data
+
+            # Check if this brain's OpenCL buffers are already cached.
+            if brain_id not in _gpu_brain_cache:
+                # If not, create, transfer, and cache the buffers.
+                weights_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=w.astype(np.float32)) for w in brain.weights]
+                biases_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=b.astype(np.float32)) for b in brain.biases]
+                _gpu_brain_cache[brain_id] = {'weights': weights_bufs, 'biases': biases_bufs}
+
+            # Run the forward pass using the cached OpenCL buffers.
+            cached_buffers = _gpu_brain_cache[brain_id]
+            actions = brain.forward(inputs, cached_buffers=cached_buffers)
+
+        except Exception as e:
+            # Fallback to default forward if caching or GPU execution fails.
+            print(f"OpenCL forward pass with caching failed: {e}. Falling back.")
+            actions = brain.forward(inputs) # This will call the NumPy version
+    else:
+        # If OpenCL is not available, use the standard NumPy forward method.
+        actions = brain.forward(inputs)
+
 
     return {
         "id": unit_data['id'],
         "actions": actions,
         "whisker_debug_info": whisker_debug_info
     }
+
+
+def clear_cache_worker(_):
+    """
+    A worker task to clear the global GPU brain cache.
+
+    This function iterates through the cached brain buffers (weights and biases)
+    and explicitly calls .release() on each OpenCL buffer to free the
+    corresponding memory on the GPU device before clearing the cache dictionary.
+    """
+    global _gpu_brain_cache
+    if _gpu_brain_cache:
+        for brain_data in _gpu_brain_cache.values():
+            for buf in brain_data['weights']:
+                buf.release()
+            for buf in brain_data['biases']:
+                buf.release()
+        _gpu_brain_cache.clear()
+    return True
 
 
 def run_single_unit_step_wrapper(task_data):
@@ -348,6 +397,20 @@ class TrainingSimulation:
         self.whisker_length = whisker_length
         self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "unit"]
         self.training_mode = TrainingMode.NAVIGATE
+
+        # --- GPU Status Warning ---
+        if not OPENCL_AVAILABLE:
+            print("\n" + "="*60)
+            print(" WARNING: GPU ACCELERATION NOT AVAILABLE ".center(60, "="))
+            print("="*60)
+            print(" PyOpenCL not found or no compatible GPU device detected.")
+            print(" The simulation will run in a slower, CPU-only mode.")
+            print(" To enable GPU acceleration:")
+            print(" 1. Ensure you have a compatible GPU with OpenCL drivers.")
+            print("    (These are typically included with standard GPU drivers).")
+            print(" 2. Install the 'pyopencl' package: pip install pyopencl")
+            print("="*60 + "\n")
+
 
         # Initialize the multiprocessing pool
         # This creates a set of worker processes that will be reused across generations
@@ -559,7 +622,20 @@ class TrainingSimulation:
         self.population = new_population
         self.population_map = {unit.id: unit for unit in self.population}
         self.generation += 1
+
+        # Clear the GPU cache in the worker processes, as the old brains are now gone.
+        self.clear_worker_caches()
+
         return fitness_scores[0][1]
+
+    def clear_worker_caches(self):
+        """Sends a task to each worker to clear its GPU cache."""
+        if self.pool and OPENCL_AVAILABLE:
+            # The argument to map is an iterable of inputs for the function.
+            # We just need to run the function once for each worker.
+            num_workers = self.pool._processes
+            self.pool.map(clear_cache_worker, range(num_workers))
+            # print("Cleared GPU caches in worker processes.") # Optional: for debugging
 
     def cleanup(self):
         """
