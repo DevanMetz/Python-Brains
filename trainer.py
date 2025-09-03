@@ -45,12 +45,15 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
         xp = cp
 
         # --- Prepare whisker data on GPU ---
-        abs_angles_gpu = xp.asarray(unit_angle + whisker_angles)
+        abs_angles = unit_angle + whisker_angles
+        abs_angles_gpu = xp.asarray(abs_angles)
         start_points_gpu = xp.asarray(unit_pos.xy).reshape(1, 2)
-        end_points_gpu = start_points_gpu + xp.stack([
+
+        whisker_end_vectors = xp.stack([
             xp.cos(abs_angles_gpu) * whisker_length,
             xp.sin(abs_angles_gpu) * whisker_length
         ], axis=1)
+        end_points_gpu = start_points_gpu + whisker_end_vectors
 
         # --- Prepare object data on GPU ---
         if local_objects_data:
@@ -65,9 +68,9 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
         # --- Wall detection (still iterative for now) ---
         wall_distances = np.full(num_whiskers, np.inf)
         if "wall" in perceivable_types:
-            for i, angle in enumerate(whisker_angles):
+            for i, angle in enumerate(abs_angles):
                 start_point = unit_pos
-                end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(unit_angle + angle))
+                end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(angle))
                 dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
                 steps = int(max(abs(dx), abs(dy)))
                 if steps > 0:
@@ -86,19 +89,32 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
         final_distances = xp.asnumpy(xp.where(obj_hit_is_closer, obj_distances, wall_distances_gpu))
         final_indices = xp.asnumpy(xp.where(obj_hit_is_closer, obj_indices, -2)) # -2 for wall
 
-        # --- Final processing on CPU ---
+        # --- Final processing on CPU to generate inputs and debug info ---
         object_types = [d['type'] for d in local_objects_data]
         for i in range(num_whiskers):
             dist = final_distances[i]
             idx = final_indices[i]
             detected_type = None
+
+            abs_angle_rad = abs_angles[i]
+            start_point = unit_pos
+            full_end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
+            intersect_point = full_end_point
+
             if dist != np.inf:
                 detected_type = "wall" if idx == -2 else object_types[idx]
+                intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
+                if detected_type and detected_type in perceivable_types:
+                    type_index = perceivable_types.index(detected_type)
+                    clamped_dist = max(0, min(dist, whisker_length))
+                    whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
 
-            if detected_type and detected_type in perceivable_types:
-                type_index = perceivable_types.index(detected_type)
-                clamped_dist = max(0, min(dist, whisker_length))
-                whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+            whisker_debug_info.append({
+                'start': (start_point.x, start_point.y),
+                'end': (intersect_point.x, intersect_point.y),
+                'full_end': (full_end_point.x, full_end_point.y),
+                'type': detected_type
+            })
 
     except Exception:
         # --- Fallback to original iterative method ---
@@ -110,6 +126,7 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
 
             closest_dist = whisker_length
             detected_type = None
+            intersect_point = end_point
 
             if "wall" in perceivable_types:
                 dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
@@ -129,10 +146,20 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
                     closest_dist = dist
                     detected_type = obj_data['type']
 
+            if closest_dist < whisker_length:
+                 intersect_point = start_point + pygame.Vector2(closest_dist, 0).rotate(np.rad2deg(abs_angle))
+
             if detected_type and detected_type in perceivable_types:
                 type_index = perceivable_types.index(detected_type)
                 clamped_dist = max(0, min(closest_dist, whisker_length))
                 whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+
+            whisker_debug_info.append({
+                'start': (start_point.x, start_point.y),
+                'end': (intersect_point.x, intersect_point.y),
+                'full_end': (end_point.x, end_point.y),
+                'type': detected_type
+            })
 
     # --- Target and other inputs (common to both paths) ---
     target_pos = pygame.Vector2(target_pos_data)
