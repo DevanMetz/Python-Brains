@@ -28,14 +28,16 @@ class Unit:
         else:
             self.whisker_angles = np.array([0]) # Single whisker facing forward
         self.whisker_length = 150
+        self.whisker_debug_info = [] # To store data for drawing
 
     def get_inputs(self, world_objects):
         """
         Calculates inputs for the MLP brain using typed whisker perception.
         For each whisker, it generates an input for each perceivable object type.
+        It also populates self.whisker_debug_info for drawing purposes.
         """
+        self.whisker_debug_info = [] # Clear previous frame's data
         num_perceivables = len(self.perceivable_types)
-        # Create a matrix for whisker inputs: rows=whiskers, cols=perceivable_types
         whisker_inputs = np.zeros((self.num_whiskers, num_perceivables))
 
         for i, whisker_angle in enumerate(self.whisker_angles):
@@ -45,13 +47,14 @@ class Unit:
 
             closest_dist = self.whisker_length
             detected_type = None
+            closest_intersect_point = end_point # Default to full length
 
             # Find the closest object intersected by this whisker
             for obj in world_objects:
                 if obj is self:
                     continue
 
-                dist = self.whisker_length + 1
+                intersect_point = None
                 if isinstance(obj, Wall):
                     points = [
                         (obj.rect.left, obj.rect.top), (obj.rect.right, obj.rect.top),
@@ -59,17 +62,27 @@ class Unit:
                     ]
                     for j in range(4):
                         p1, p2 = points[j], points[(j + 1) % 4]
-                        intersect_point = line_intersection(start_point, end_point, p1, p2)
-                        if intersect_point:
-                            dist = self.position.distance_to(intersect_point)
+                        intersect = line_intersection(start_point, end_point, p1, p2)
+                        if intersect:
+                            dist = self.position.distance_to(intersect)
+                            if dist < closest_dist:
+                                closest_dist = dist
+                                detected_type = obj.type
+                                closest_intersect_point = intersect
                 elif hasattr(obj, 'position'): # Circle-based objects
-                    intersect_dist = line_circle_intersection(start_point, end_point, obj.position, obj.size)
-                    if intersect_dist is not None:
-                        dist = intersect_dist
+                    dist = line_circle_intersection(start_point, end_point, obj.position, obj.size)
+                    if dist is not None and dist < closest_dist:
+                        closest_dist = dist
+                        detected_type = obj.type
+                        closest_intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle))
 
-                if dist < closest_dist:
-                    closest_dist = dist
-                    detected_type = obj.type
+            # Store debug info for this whisker
+            self.whisker_debug_info.append({
+                'start': start_point,
+                'end': closest_intersect_point,
+                'full_end': end_point,
+                'type': detected_type
+            })
 
             # If an object was detected, update the corresponding input neuron
             if detected_type and detected_type in self.perceivable_types:
@@ -114,10 +127,30 @@ class Unit:
                     world_projectiles.append(projectile)
 
     def draw(self, screen):
-        # Draw body
+        # --- Draw whiskers first, so they are behind the unit ---
+        WHISKER_COLOR = (100, 100, 100) # Faint gray for max range
+        HIT_COLORS = {
+            "wall": (200, 200, 200), # White
+            "enemy": (255, 100, 100), # Light Red
+            "unit": (100, 100, 255), # Light Blue
+            "target": (100, 255, 100), # Light Green
+        }
+
+        for info in self.whisker_debug_info:
+            # Draw the full length whisker faintly
+            pygame.draw.line(screen, WHISKER_COLOR, info['start'], info['full_end'], 1)
+
+            # If there was a hit, draw the collision line more brightly
+            if info['type']:
+                hit_color = HIT_COLORS.get(info['type'], (255, 255, 255)) # Default to bright white
+                pygame.draw.line(screen, hit_color, info['start'], info['end'], 2)
+                pygame.draw.circle(screen, hit_color, (int(info['end'].x), int(info['end'].y)), 3)
+
+
+        # --- Draw unit body ---
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
 
-        # Draw direction indicator
+        # --- Draw direction indicator ---
         end_pos = self.position + pygame.Vector2(self.size, 0).rotate(np.rad2deg(self.angle))
         pygame.draw.line(screen, (255, 0, 0), self.position, end_pos, 2)
 
