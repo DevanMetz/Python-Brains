@@ -84,3 +84,21 @@ To solve the bottleneck, the simulation loop was re-architected to use Python's 
 -   **Efficient State Sharing:** To avoid the high overhead of sending the large `TileMap` object to every worker for every task, it is now passed once to each worker process upon its creation using the pool's `initializer` function.
 
 This change allows the simulation to scale with the number of CPU cores, leading to a dramatic reduction in the time required to train a generation of brains.
+
+### 8.3. Spatial Partitioning for Collision Detection
+While multiprocessing parallelized the work, a new bottleneck emerged within the worker function itself. The `get_unit_inputs` function, which calculates the sensory data for each unit's "whiskers," had to check every whisker against every other object in the simulation. This resulted in an O(N*M) complexity, where N is the number of units and M is the number of objects, leading to poor performance as the population size grew.
+
+To address this, a `SpatialGrid` was introduced.
+
+-   **Grid System:** The world is now divided into a grid of fixed-size cells. At the beginning of each simulation step, every object (units, enemies, etc.) is registered into the cells it overlaps with.
+-   **Optimized Queries:** When a unit's whisker needs to check for collisions, instead of iterating through all objects, it queries the `SpatialGrid`. It retrieves a list of only the objects that are in the same cells as the whisker.
+-   **Performance Gain:** This change dramatically reduces the number of collision checks that need to be performed, especially in sparse areas of the map. It replaces the costly O(N*M) search with a much faster query that is closer to O(1) on average, depending on object density. This allows for much larger populations and more complex environments without a significant drop in performance.
+
+### 8.4. Headless Training Mode
+Even with the simulation logic running in parallel, the main thread was still required to render the entire scene on every frame. This rendering process, which involves drawing the map, UI, and every single unit and projectile, became the new bottleneck, artificially capping the simulation speed to the monitor's refresh rate (e.g., 60 FPS).
+
+To enable much faster training, a "headless" mode was introduced.
+
+-   **Toggleable Rendering:** The user can press a key (default: 'H') during the simulation to toggle rendering on and off.
+-   **Uncapped Simulation Speed:** When rendering is disabled, the main loop skips all `pygame.draw` calls and the `pygame.display.flip()` call. This completely uncouples the simulation from the rendering pipeline, allowing the simulation to run as fast as the CPU can process the generations.
+-   **Progress Monitoring:** The simulation continues to print generation statistics to the console, so the user can monitor training progress even while the screen is not being updated. This allows for rapid evolution of brains without the overhead of visualization.
