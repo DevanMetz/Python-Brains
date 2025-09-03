@@ -75,6 +75,29 @@ class TestMLPOpenCL:
 
         assert np.allclose(cached_output, uncached_output, atol=1e-6), "Cached and uncached OpenCL outputs do not match."
 
+    def test_cloned_instance_forward_pass(self):
+        """
+        Tests that a cloned MLPOpenCL instance can still perform a forward pass.
+        This specifically targets the bug where `clone()` created a base MLP instance.
+        """
+        layer_sizes = [5, 5]
+        opencl_mlp = MLPOpenCL(layer_sizes)
+        inputs = np.random.rand(1, layer_sizes[0]).astype(np.float32)
+
+        # Clone the object
+        cloned_mlp = opencl_mlp.clone()
+
+        # The cloned object should be of the same type
+        assert isinstance(cloned_mlp, MLPOpenCL)
+
+        # Calling forward with caching should now work without a TypeError
+        try:
+            # We don't need to check for correctness here, just that it doesn't crash.
+            # The other tests handle correctness.
+            cloned_mlp.forward(inputs, cached_buffers=None)
+        except TypeError as e:
+            pytest.fail(f"Cloned MLPOpenCL instance failed forward pass with TypeError: {e}")
+
 
 @skip_if_no_opencl
 class TestOpenCLMath:

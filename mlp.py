@@ -159,7 +159,9 @@ class MLP:
         Returns:
             MLP: A new MLP instance with identical weights and biases.
         """
-        cloned_mlp = MLP(self.layer_sizes)
+        # Use self.__class__ to ensure the clone is of the same subclass
+        # (e.g., MLPOpenCL) as the instance being cloned.
+        cloned_mlp = self.__class__(self.layer_sizes)
         cloned_mlp.weights = [w.copy() for w in self.weights]
         cloned_mlp.biases = [b.copy() for b in self.biases]
         return cloned_mlp
