@@ -152,9 +152,16 @@ def _process_perception_results(unit_data, whisker_results, circle_object_types)
         intersect_point = full_end_point
 
         if dist != np.inf and dist <= whisker_length:
-            detected_type = "wall" if idx == -2 else circle_object_types[idx]
-            intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
-            if detected_type and detected_type in perceivable_types:
+            if idx == -2:
+                detected_type = "wall"
+            # Explicitly check that the index is valid before using it
+            elif idx != -1 and idx < len(circle_object_types):
+                detected_type = circle_object_types[idx]
+
+            # If a valid object was detected, process it
+            if detected_type:
+                intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
+                if detected_type in perceivable_types:
                 type_index = perceivable_types.index(detected_type)
                 clamped_dist = max(0, min(dist, whisker_length))
                 whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
