@@ -108,6 +108,94 @@ def vectorized_line_circle_intersection(p1s, p2s, centers, radii, xp):
 
 import pygame
 import numpy as np
+from map import Tile
+
+
+def ray_cast_grid(start_point, end_point, tile_map):
+    """
+    Finds the intersection point of a line segment with a grid of wall tiles.
+
+    This function implements a fast ray-casting algorithm that steps along grid
+    lines (similar to Amanatides-Woo) instead of checking every pixel. This is
+    significantly more efficient than a simple DDA implementation.
+
+    Args:
+        start_point (pygame.Vector2): The starting point of the ray.
+        end_point (pygame.Vector2): The ending point of the ray.
+        tile_map (TileMap): The tile map to cast the ray against.
+
+    Returns:
+        pygame.Vector2 or None: The point of intersection with a wall, or None
+        if no wall is hit within the ray's length.
+    """
+    p1 = pygame.Vector2(start_point)
+    direction = end_point - p1
+    ray_length = direction.length()
+    if ray_length == 0:
+        return None
+
+    dir_x, dir_y = direction.x, direction.y
+
+    # Normalize direction vector to get unit vector
+    if ray_length > 0:
+        unit_dir_x = dir_x / ray_length
+        unit_dir_y = dir_y / ray_length
+    else:
+        return None
+
+    # Current position in grid coordinates
+    map_x = int(p1.x / tile_map.tile_size)
+    map_y = int(p1.y / tile_map.tile_size)
+
+    # Distance along the ray to cross one grid cell in x or y
+    # This is calculated from the unit direction vector
+    delta_dist_x = abs(1 / unit_dir_x) if unit_dir_x != 0 else float('inf')
+    delta_dist_y = abs(1 / unit_dir_y) if unit_dir_y != 0 else float('inf')
+
+    # Step direction (either +1 or -1 for grid coordinates)
+    step_x = 1 if dir_x > 0 else -1
+    step_y = 1 if dir_y > 0 else -1
+
+    # Total distance from the start of the ray to the next grid line intersection
+    if dir_x > 0:
+        side_dist_x = ((map_x + 1) * tile_map.tile_size - p1.x) * delta_dist_x
+    elif dir_x < 0:
+        side_dist_x = (p1.x - map_x * tile_map.tile_size) * delta_dist_x
+    else:
+        side_dist_x = float('inf')
+
+    if dir_y > 0:
+        side_dist_y = ((map_y + 1) * tile_map.tile_size - p1.y) * delta_dist_y
+    elif dir_y < 0:
+        side_dist_y = (p1.y - map_y * tile_map.tile_size) * delta_dist_y
+    else:
+        side_dist_y = float('inf')
+
+    # Main loop: step from grid line to grid line
+    while True:
+        # Determine which distance is shorter
+        if side_dist_x < side_dist_y:
+            dist = side_dist_x
+            side_dist_x += delta_dist_x
+            map_x += step_x
+        else:
+            dist = side_dist_y
+            side_dist_y += delta_dist_y
+            map_y += step_y
+
+        # If the distance is greater than the ray's length, we're done
+        if dist > ray_length:
+            return None
+
+        # Check if we're out of map bounds
+        if not (0 <= map_x < tile_map.grid_width and 0 <= map_y < tile_map.grid_height):
+            return None
+
+        # Check if the current tile is a wall
+        if tile_map.get_tile(map_x, map_y) == Tile.WALL:
+            # We have a hit! The intersection point is at this distance along the ray.
+            return p1 + pygame.Vector2(unit_dir_x, unit_dir_y) * dist
+
 
 def iterative_line_circle_intersection(p1, p2, circle_center, radius):
     """Calculates the intersection of a single line segment and a circle.
