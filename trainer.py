@@ -162,9 +162,9 @@ def _process_perception_results(unit_data, whisker_results, circle_object_types)
             if detected_type:
                 intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
                 if detected_type in perceivable_types:
-                type_index = perceivable_types.index(detected_type)
-                clamped_dist = max(0, min(dist, whisker_length))
-                whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+                    type_index = perceivable_types.index(detected_type)
+                    clamped_dist = max(0, min(dist, whisker_length))
+                    whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
 
         whisker_debug_info.append({'start': (start_point.x, start_point.y), 'end': (intersect_point.x, intersect_point.y), 'full_end': (full_end_point.x, full_end_point.y), 'type': detected_type})
 
