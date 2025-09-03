@@ -345,8 +345,9 @@ class TrainingSimulation:
 
             all_distances = np.empty(total_whiskers, dtype=np.float32)
             all_indices = np.empty(total_whiskers, dtype=np.int32)
-            cl.enqueue_copy(queue, all_distances, self.perception_cache['out_distances_buf'], depends_on=[kernel_event])
-            cl.enqueue_copy(queue, all_indices, self.perception_cache['out_indices_buf'], depends_on=[kernel_event]).wait()
+            # Read results back from the GPU. This must wait for the kernel to finish.
+            cl.enqueue_copy(queue, all_distances, self.perception_cache['out_distances_buf'], wait_for=[kernel_event])
+            cl.enqueue_copy(queue, all_indices, self.perception_cache['out_indices_buf'], wait_for=[kernel_event]).wait()
 
             circle_object_types = [o.type for o in circle_objects]
             for i, unit in enumerate(self.population):
