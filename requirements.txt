@@ -1,6 +1,7 @@
 pygame-ce
 numpy
 pygame-gui
+pyopencl
 
 # Optional GPU Acceleration with CuPy
 # -----------------------------------

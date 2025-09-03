@@ -18,15 +18,15 @@ import pygame
 from functools import partial
 from multiprocessing import Pool, cpu_count
 from game import Unit, Target, Wall, Enemy
-from mlp_cupy import MLPCupy as MLP, CUPY_AVAILABLE
+from mlp_opencl import MLPOpenCL as MLP, OPENCL_AVAILABLE
 from map import Tile
 from quadtree import QuadTree, Rectangle
 from math_utils import iterative_line_circle_intersection
 
-# Import CuPy and related functions if available
-if CUPY_AVAILABLE:
-    import cupy as cp
-    from math_utils import vectorized_line_circle_intersection
+# Import OpenCL functions if available
+if OPENCL_AVAILABLE:
+    import pyopencl as cl
+    from math_utils_opencl import opencl_vectorized_line_circle_intersection
 
 # --- Worker Function for Multiprocessing ---
 
@@ -97,33 +97,38 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
     whisker_debug_info = []
 
-    # Use the CUPY_AVAILABLE flag to choose the execution path.
-    if CUPY_AVAILABLE:
+    # Use the OPENCL_AVAILABLE flag to choose the execution path.
+    if OPENCL_AVAILABLE:
         try:
-            # --- GPU-accelerated vectorized path ---
-            xp = cp
+            # --- GPU-accelerated vectorized path (OpenCL) ---
             abs_angles = unit_angle + whisker_angles
 
+            # Prepare whisker start and end points as NumPy arrays
+            start_points_np = np.tile(unit_pos, (num_whiskers, 1))
+            end_vectors_np = np.column_stack([
+                np.cos(abs_angles) * whisker_length,
+                np.sin(abs_angles) * whisker_length
+            ])
+            end_points_np = start_points_np + end_vectors_np
+
+            # Prepare circle data as NumPy arrays
             if local_objects_data:
-                start_points_gpu = xp.asarray(unit_pos.xy).reshape(1, 2)
-                whisker_end_vectors = xp.stack([
-                    xp.cos(xp.asarray(abs_angles)) * whisker_length,
-                    xp.sin(xp.asarray(abs_angles)) * whisker_length
-                ], axis=1)
-                end_points_gpu = start_points_gpu + whisker_end_vectors
-
-                centers_gpu = xp.asarray([d['position'] for d in local_objects_data])
-                radii_gpu = xp.asarray([d['size'] for d in local_objects_data])
-
-                obj_distances, obj_indices = vectorized_line_circle_intersection(
-                    start_points_gpu, end_points_gpu, centers_gpu, radii_gpu, xp)
+                centers_np = np.array([d['position'] for d in local_objects_data], dtype=np.float32)
+                radii_np = np.array([d['size'] for d in local_objects_data], dtype=np.float32)
             else:
-                obj_distances = xp.full(num_whiskers, xp.inf)
-                obj_indices = xp.full(num_whiskers, -1, dtype=xp.int32)
+                centers_np = np.empty((0, 2), dtype=np.float32)
+                radii_np = np.empty(0, dtype=np.float32)
 
-            wall_distances = np.full(num_whiskers, np.inf)
+            # Call the OpenCL kernel wrapper
+            obj_distances, obj_indices = opencl_vectorized_line_circle_intersection(
+                start_points_np, end_points_np, centers_np, radii_np
+            )
+
+            # --- Wall detection (remains on CPU as it's iterative and complex to vectorize) ---
+            wall_distances = np.full(num_whiskers, np.inf, dtype=np.float32)
             if "wall" in perceivable_types:
                 for i, whisker_angle in enumerate(whisker_angles):
+                    # This logic is duplicated from the fallback path for simplicity
                     abs_angle_rad = unit_angle + whisker_angle
                     start_point = unit_pos
                     end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
@@ -137,11 +142,11 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
                                 wall_distances[i] = unit_pos.distance_to(pygame.Vector2(x, y))
                                 break
 
-            wall_distances_gpu = xp.asarray(wall_distances)
-            obj_hit_is_closer = obj_distances < wall_distances_gpu
-            final_distances = xp.asnumpy(xp.where(obj_hit_is_closer, obj_distances, wall_distances_gpu))
-            final_indices = xp.asnumpy(xp.where(obj_hit_is_closer, obj_indices, -2))
+            # --- Combine GPU (object) and CPU (wall) results ---
+            final_distances = np.where(obj_distances < wall_distances, obj_distances, wall_distances)
+            final_indices = np.where(obj_distances < wall_distances, obj_indices, -2) # -2 for wall
 
+            # --- Final processing to generate inputs and debug info ---
             object_types = [d['type'] for d in local_objects_data]
             for i in range(num_whiskers):
                 dist, idx = final_distances[i], final_indices[i]
@@ -162,14 +167,11 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
                 whisker_debug_info.append({'start': (start_point.x, start_point.y), 'end': (intersect_point.x, intersect_point.y), 'full_end': (full_end_point.x, full_end_point.y), 'type': detected_type})
 
         except Exception as e:
-            print(f"Warning: GPU-based perception failed with error: {e}. Falling back to CPU.")
-            # If GPU path fails, we'll rely on the next check to use the CPU path.
-            # We cannot reassign a global variable here as it creates an UnboundLocalError.
-            pass
+            print(f"Warning: OpenCL-based perception failed with error: {e}. Falling back to CPU.")
+            # Force a recalculation on CPU by ensuring the next check fails.
+            OPENCL_AVAILABLE = False
 
-    # Re-check CUPY_AVAILABLE in case it failed above and was a one-time error.
-    # The primary check is to handle when CuPy is not installed at all.
-    if not CUPY_AVAILABLE:
+    if not OPENCL_AVAILABLE:
         # --- Fallback to original iterative method ---
         for i, whisker_angle in enumerate(whisker_angles):
             abs_angle = unit_angle + whisker_angle
@@ -254,33 +256,32 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data):
 
     brain = unit_data['brain']
 
-    # --- Optimized MLP Forward Pass with Caching ---
+    # --- Optimized MLP Forward Pass with OpenCL Caching ---
     actions = None
-    if CUPY_AVAILABLE:
+    if OPENCL_AVAILABLE:
         try:
-            import cupy as cp
-            # Use the memory address of the first weights array as a unique ID for this brain's parameters.
-            # This is a robust way to identify a specific brain instance within a worker process.
+            from mlp_opencl import context # Get the worker's context
+
+            # Use the memory address of the weights array as a unique ID.
             brain_id = brain.weights[0].ctypes.data
 
-            # Check if this brain's parameters are already cached on the GPU
+            # Check if this brain's OpenCL buffers are already cached.
             if brain_id not in _gpu_brain_cache:
-                # If not, transfer weights and biases to GPU and cache them
-                weights_gpu = [cp.asarray(w) for w in brain.weights]
-                biases_gpu = [cp.asarray(b) for b in brain.biases]
-                _gpu_brain_cache[brain_id] = (weights_gpu, biases_gpu)
+                # If not, create, transfer, and cache the buffers.
+                weights_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=w.astype(np.float32)) for w in brain.weights]
+                biases_bufs = [cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=b.astype(np.float32)) for b in brain.biases]
+                _gpu_brain_cache[brain_id] = {'weights': weights_bufs, 'biases': biases_bufs}
 
-            # Retrieve the cached GPU parameters
-            cached_weights, cached_biases = _gpu_brain_cache[brain_id]
+            # Run the forward pass using the cached OpenCL buffers.
+            cached_buffers = _gpu_brain_cache[brain_id]
+            actions = brain.forward(inputs, cached_buffers=cached_buffers)
 
-            # Run the forward pass using the cached GPU data
-            actions = brain.forward(inputs, _weights_gpu=cached_weights, _biases_gpu=cached_biases)
         except Exception as e:
-            # Fallback to default forward if caching or GPU execution fails
-            print(f"GPU forward pass with caching failed: {e}. Falling back.")
-            actions = brain.forward(inputs)
+            # Fallback to default forward if caching or GPU execution fails.
+            print(f"OpenCL forward pass with caching failed: {e}. Falling back.")
+            actions = brain.forward(inputs) # This will call the NumPy version
     else:
-        # If CuPy is not available, use the standard forward method
+        # If OpenCL is not available, use the standard NumPy forward method.
         actions = brain.forward(inputs)
 
 
@@ -292,9 +293,20 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data):
 
 
 def clear_cache_worker(_):
-    """A simple worker task to clear the global GPU brain cache."""
+    """
+    A worker task to clear the global GPU brain cache.
+
+    This function iterates through the cached brain buffers (weights and biases)
+    and explicitly calls .release() on each OpenCL buffer to free the
+    corresponding memory on the GPU device before clearing the cache dictionary.
+    """
     global _gpu_brain_cache
     if _gpu_brain_cache:
+        for brain_data in _gpu_brain_cache.values():
+            for buf in brain_data['weights']:
+                buf.release()
+            for buf in brain_data['biases']:
+                buf.release()
         _gpu_brain_cache.clear()
     return True
 
@@ -386,18 +398,16 @@ class TrainingSimulation:
         self.training_mode = TrainingMode.NAVIGATE
 
         # --- GPU Status Warning ---
-        if not CUPY_AVAILABLE:
+        if not OPENCL_AVAILABLE:
             print("\n" + "="*60)
             print(" WARNING: GPU ACCELERATION NOT AVAILABLE ".center(60, "="))
             print("="*60)
-            print(" CuPy not found or no compatible GPU (NVIDIA/AMD) detected.")
+            print(" PyOpenCL not found or no compatible GPU device detected.")
             print(" The simulation will run in a slower, CPU-only mode.")
             print(" To enable GPU acceleration:")
-            print(" 1. Ensure you have a compatible GPU and drivers installed:")
-            print("    - NVIDIA: CUDA Toolkit")
-            print("    - AMD: ROCm Drivers")
-            print(" 2. Install the correct CuPy version for your hardware.")
-            print("    (See instructions in 'requirements.txt')")
+            print(" 1. Ensure you have a compatible GPU with OpenCL drivers.")
+            print("    (These are typically included with standard GPU drivers).")
+            print(" 2. Install the 'pyopencl' package: pip install pyopencl")
             print("="*60 + "\n")
 
 
