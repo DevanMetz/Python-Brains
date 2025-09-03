@@ -3,8 +3,10 @@ import numpy as np
 
 # Conditional import of OpenCL modules to allow tests to be collected even if pyopencl is not installed
 try:
+    import pygame
     from mlp_opencl import MLPOpenCL, OPENCL_AVAILABLE
-    from math_utils_opencl import opencl_vectorized_line_circle_intersection
+    from math_utils_opencl import opencl_unified_perception
+    from map import TileMap, Tile
 except ImportError:
     OPENCL_AVAILABLE = False
 
@@ -98,47 +100,127 @@ class TestMLPOpenCL:
 
 @skip_if_no_opencl
 class TestOpenCLMath:
-    def test_intersection_correctness(self):
+    def test_unified_perception_correctness(self):
         """
-        Tests if the OpenCL line-circle intersection kernel produces the same
-        result as the iterative NumPy-based implementation.
+        Tests if the unified OpenCL perception kernel produces the same result
+        as the original, iterative CPU-based logic. This is the primary
+        correctness test for the perception system.
         """
-        # --- Test Case 1: Simple intersection ---
-        p1s = np.array([[0, 0]], dtype=np.float32)
-        p2s = np.array([[10, 0]], dtype=np.float32)
-        centers = np.array([[5, 0]], dtype=np.float32)
-        radii = np.array([1], dtype=np.float32)
+        from math_utils_opencl import context
+        import pyopencl as cl
 
-        # Run OpenCL version
-        dist_cl, idx_cl = opencl_vectorized_line_circle_intersection(p1s, p2s, centers, radii)
+        # --- 1. Setup Test Scenario ---
+        # Create a simple tile map (e.g., 20x15) with a vertical wall
+        tile_map = TileMap(200, 150, 10) # 20x15 tiles of size 10
+        for y in range(5, 10):
+            tile_map.set_tile(10, y, Tile.WALL) # Wall at x=100px
 
-        # Compare with iterative version (which we trust as the ground truth)
-        dist_iter = iterative_line_circle_intersection(p1s[0], p2s[0], centers[0], radii[0])
+        # Create circle objects
+        centers = np.array([[50, 75]], dtype=np.float32) # One circle
+        radii = np.array([10], dtype=np.float32)
 
-        assert idx_cl[0] == 0
-        assert np.isclose(dist_cl[0], dist_iter)
+        # Create whiskers from a single point
+        p1s = np.array([[20, 75], [20, 75], [20, 0]], dtype=np.float32)
+        p2s = np.array([
+            [120, 75], # Whisker 0: Should hit the wall at x=100
+            [60, 75],  # Whisker 1: Should hit the circle at x=50
+            [20, 20]    # Whisker 2: Should hit nothing
+        ], dtype=np.float32)
 
-        # --- Test Case 2: No intersection ---
-        centers_no_hit = np.array([[20, 20]], dtype=np.float32)
-        dist_cl_no_hit, idx_cl_no_hit = opencl_vectorized_line_circle_intersection(p1s, p2s, centers_no_hit, radii)
+        # --- 2. Get Ground Truth (CPU Fallback Logic) ---
+        expected_dists = []
+        expected_indices = []
+        for i in range(len(p1s)):
+            p1 = pygame.Vector2(p1s[i])
+            p2 = pygame.Vector2(p2s[i])
+            whisker_length = p1.distance_to(p2)
 
-        assert idx_cl_no_hit[0] == -1
-        assert np.isinf(dist_cl_no_hit[0])
+            closest_dist = np.inf
+            detected_type_idx = -1
 
-        # --- Test Case 3: Multiple whiskers and multiple circles ---
-        p1s_multi = np.array([[0, 0], [10, 10]], dtype=np.float32)
-        p2s_multi = np.array([[10, 0], [0, 10]], dtype=np.float32)
-        centers_multi = np.array([[5, 0], [5, 10], [20, 20]], dtype=np.float32)
-        radii_multi = np.array([2, 2, 2], dtype=np.float32)
+            # CPU Wall check
+            dx, dy = p2.x - p1.x, p2.y - p1.y
+            steps = int(max(abs(dx), abs(dy)))
+            if steps > 0:
+                x_inc, y_inc = dx / steps, dy / steps
+                for j in range(1, steps + 1):
+                    x, y = p1.x + j * x_inc, p1.y + j * y_inc
+                    if tile_map.get_tile_at_pixel(x,y) == Tile.WALL:
+                        closest_dist = p1.distance_to(pygame.Vector2(x,y))
+                        detected_type_idx = -2 # Wall
+                        break
 
-        dist_cl_multi, idx_cl_multi = opencl_vectorized_line_circle_intersection(p1s_multi, p2s_multi, centers_multi, radii_multi)
+            # CPU Object check
+            for obj_idx, center in enumerate(centers):
+                dist = iterative_line_circle_intersection(p1, p2, pygame.Vector2(center), radii[obj_idx])
+                if dist is not None and dist < closest_dist:
+                    closest_dist = dist
+                    detected_type_idx = obj_idx
 
-        # Whisker 0 should hit circle 0
-        dist_iter_0 = iterative_line_circle_intersection(p1s_multi[0], p2s_multi[0], centers_multi[0], radii_multi[0])
-        assert idx_cl_multi[0] == 0
-        assert np.isclose(dist_cl_multi[0], dist_iter_0)
+            expected_dists.append(closest_dist if closest_dist < whisker_length else np.inf)
+            expected_indices.append(detected_type_idx)
 
-        # Whisker 1 should hit circle 1
-        dist_iter_1 = iterative_line_circle_intersection(p1s_multi[1], p2s_multi[1], centers_multi[1], radii_multi[1])
-        assert idx_cl_multi[1] == 1
-        assert np.isclose(dist_cl_multi[1], dist_iter_1)
+        # --- 3. Get Actual Results (GPU Unified Kernel) ---
+        map_data_flat = tile_map.tiles.flatten().astype(np.int32)
+        tile_map_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=map_data_flat)
+
+        actual_dists, actual_indices = opencl_unified_perception(
+            p1s, p2s, centers, radii, tile_map_buf, tile_map.width, tile_map.tile_size
+        )
+
+        tile_map_buf.release()
+
+        # --- 4. Compare and Assert ---
+        # Whisker 0 (hits wall)
+        assert actual_indices[0] == expected_indices[0]
+        assert np.isclose(actual_dists[0], expected_dists[0], atol=2.0)
+
+        # Whisker 1 (hits circle)
+        assert actual_indices[1] == expected_indices[1]
+        assert np.isclose(actual_dists[1], expected_dists[1])
+
+        # Whisker 2 (hits nothing)
+        assert actual_indices[2] == expected_indices[2]
+        assert np.isinf(actual_dists[2])
+
+    def test_unified_perception_conditional_logic(self):
+        """
+        Tests that the conditional flags in the unified kernel work correctly.
+        """
+        from math_utils_opencl import context
+        import pyopencl as cl
+
+        # Setup a scenario with both a wall and a circle
+        tile_map = TileMap(200, 150, 10)
+        tile_map.set_tile(10, 7, Tile.WALL)
+        centers = np.array([[50, 75]], dtype=np.float32)
+        radii = np.array([10], dtype=np.float32)
+        p1s = np.array([[20, 75]], dtype=np.float32)
+        p2s = np.array([[120, 75]], dtype=np.float32) # Aims at both
+
+        map_data_flat = tile_map.tiles.flatten().astype(np.int32)
+        tile_map_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=map_data_flat)
+
+        # Case 1: Detect only circles
+        dists, indices = opencl_unified_perception(
+            p1s, p2s, centers, radii, tile_map_buf, tile_map.width, tile_map.tile_size,
+            detect_circles=True, detect_walls=False
+        )
+        assert indices[0] == 0 # Should detect the circle
+
+        # Case 2: Detect only walls
+        dists, indices = opencl_unified_perception(
+            p1s, p2s, centers, radii, tile_map_buf, tile_map.width, tile_map.tile_size,
+            detect_circles=False, detect_walls=True
+        )
+        assert indices[0] == -2 # Should detect the wall
+
+        # Case 3: Detect nothing
+        dists, indices = opencl_unified_perception(
+            p1s, p2s, centers, radii, tile_map_buf, tile_map.width, tile_map.tile_size,
+            detect_circles=False, detect_walls=False
+        )
+        assert indices[0] == -1 # Should detect nothing
+        assert np.isinf(dists[0])
+
+        tile_map_buf.release()

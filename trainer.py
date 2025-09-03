@@ -26,28 +26,39 @@ from math_utils import iterative_line_circle_intersection
 # Import OpenCL functions if available
 if OPENCL_AVAILABLE:
     import pyopencl as cl
-    from math_utils_opencl import opencl_vectorized_line_circle_intersection
+    from math_utils_opencl import opencl_unified_perception
+    from mlp_opencl import context, queue
+
 
 # --- Worker Function for Multiprocessing ---
 
 _tile_map_global = None
 _gpu_brain_cache = {}
+_tile_map_buf_global = None # Cache for the tilemap OpenCL buffer
 
 def init_worker(tile_map):
     """Initializer for each worker process in the multiprocessing pool.
 
     This function sets up global variables within the worker's scope.
     This is an optimization to avoid serializing and sending large, static
-    data with every task.
+    data with every task. It also pre-uploads static data like the tile map
+    to the GPU once per worker.
 
     Args:
         tile_map (TileMap): The global tile map for the simulation.
     """
-    global _tile_map_global, _gpu_brain_cache
+    global _tile_map_global, _gpu_brain_cache, _tile_map_buf_global
     _tile_map_global = tile_map
     # The brain cache is also made global to persist across tasks within
     # the same worker process. It stores GPU-resident copies of brain weights.
     _gpu_brain_cache = {}
+
+    # Pre-upload the tile map to the GPU for this worker
+    if OPENCL_AVAILABLE:
+        # Flatten the 2D tile map into a 1D array
+        map_data = _tile_map_global.tiles.flatten().astype(np.int32)
+        # Create a read-only buffer on the GPU
+        _tile_map_buf_global = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=map_data)
 
 
 def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
@@ -119,32 +130,22 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
                 centers_np = np.empty((0, 2), dtype=np.float32)
                 radii_np = np.empty(0, dtype=np.float32)
 
-            # Call the OpenCL kernel wrapper
-            obj_distances, obj_indices = opencl_vectorized_line_circle_intersection(
-                start_points_np, end_points_np, centers_np, radii_np
+            # Determine which parts of the perception kernel to run
+            detect_walls = "wall" in perceivable_types
+            detect_circles = "enemy" in perceivable_types or "unit" in perceivable_types
+
+            # Call the unified OpenCL kernel for all perception tasks
+            final_distances, final_indices = opencl_unified_perception(
+                p1s_np=start_points_np,
+                p2s_np=end_points_np,
+                centers_np=centers_np,
+                radii_np=radii_np,
+                tile_map_buf=_tile_map_buf_global,
+                map_width_tiles=_tile_map_global.width,
+                tile_size=_tile_map_global.tile_size,
+                detect_circles=detect_circles,
+                detect_walls=detect_walls
             )
-
-            # --- Wall detection (remains on CPU as it's iterative and complex to vectorize) ---
-            wall_distances = np.full(num_whiskers, np.inf, dtype=np.float32)
-            if "wall" in perceivable_types:
-                for i, whisker_angle in enumerate(whisker_angles):
-                    # This logic is duplicated from the fallback path for simplicity
-                    abs_angle_rad = unit_angle + whisker_angle
-                    start_point = unit_pos
-                    end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
-                    dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
-                    steps = int(max(abs(dx), abs(dy)))
-                    if steps > 0:
-                        x_inc, y_inc = dx / steps, dy / steps
-                        for j in range(steps):
-                            x, y = start_point.x + j * x_inc, start_point.y + j * y_inc
-                            if _tile_map_global.get_tile_at_pixel(x, y) == Tile.WALL:
-                                wall_distances[i] = unit_pos.distance_to(pygame.Vector2(x, y))
-                                break
-
-            # --- Combine GPU (object) and CPU (wall) results ---
-            final_distances = np.where(obj_distances < wall_distances, obj_distances, wall_distances)
-            final_indices = np.where(obj_distances < wall_distances, obj_indices, -2) # -2 for wall
 
             # --- Final processing to generate inputs and debug info ---
             object_types = [d['type'] for d in local_objects_data]
@@ -308,13 +309,14 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data, br
 
 def clear_cache_worker(_):
     """
-    A worker task to clear the global GPU brain cache.
+    A worker task to clear all global GPU caches.
 
     This function iterates through the cached brain buffers (weights and biases)
     and explicitly calls .release() on each OpenCL buffer to free the
     corresponding memory on the GPU device before clearing the cache dictionary.
+    It also releases the global tile map buffer.
     """
-    global _gpu_brain_cache
+    global _gpu_brain_cache, _tile_map_buf_global
     if _gpu_brain_cache:
         for brain_data in _gpu_brain_cache.values():
             for buf in brain_data['weights']:
@@ -327,6 +329,11 @@ def clear_cache_worker(_):
             if 'intermediate_b' in brain_data:
                 brain_data['intermediate_b'].release()
         _gpu_brain_cache.clear()
+
+    if _tile_map_buf_global:
+        _tile_map_buf_global.release()
+        _tile_map_buf_global = None
+
     return True
 
 
