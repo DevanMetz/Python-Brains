@@ -58,13 +58,13 @@ class DesignMenu:
         # --- UI Elements for Perception Types ---
         self.sense_wall_checkbox = pygame_gui.elements.UICheckBox(
             relative_rect=pygame.Rect((10, 170), (140, 25)), text="Sense Walls", manager=ui_manager, container=self.panel)
-        self.sense_wall_checkbox.is_selected = True
+        self.sense_wall_checkbox.checked = True
         self.sense_enemy_checkbox = pygame_gui.elements.UICheckBox(
             relative_rect=pygame.Rect((150, 170), (140, 25)), text="Sense Enemies", manager=ui_manager, container=self.panel)
-        self.sense_enemy_checkbox.is_selected = True
+        self.sense_enemy_checkbox.checked = True
         self.sense_unit_checkbox = pygame_gui.elements.UICheckBox(
             relative_rect=pygame.Rect((10, 200), (140, 25)), text="Sense Friendlies", manager=ui_manager, container=self.panel)
-        self.sense_unit_checkbox.is_selected = True
+        self.sense_unit_checkbox.checked = True
 
         # --- Action Buttons ---
         self.update_button = pygame_gui.elements.UIButton(
@@ -119,11 +119,11 @@ class DesignMenu:
     def get_perceivable_types(self):
         """Returns a list of selected type strings."""
         types = []
-        if self.sense_wall_checkbox.is_selected:
+        if self.sense_wall_checkbox.checked:
             types.append("wall")
-        if self.sense_enemy_checkbox.is_selected:
+        if self.sense_enemy_checkbox.checked:
             types.append("enemy")
-        if self.sense_unit_checkbox.is_selected:
+        if self.sense_unit_checkbox.checked:
             types.append("unit")
         # "target" is not a player-selectable option for now
         return types
