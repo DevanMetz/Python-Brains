@@ -35,40 +35,41 @@ def test_determine_new_position_cannot_move_into_wall():
     final_x, final_y = determine_new_position(start_x, start_y, Action.MOVE_E, static_grid)
     assert (final_x, final_y) == (start_x, start_y)
 
-def test_get_vision_inputs():
-    """Tests the 8-directional ray-casting vision system."""
+def test_get_vision_inputs_correct_normalization():
+    """Tests the 8-directional range-limited vision system."""
     static_grid = np.full((20, 20), Tile.EMPTY.value, dtype=int)
-    # Create a wall box around (10, 10)
-    # Top wall at y=7
+    # Wall at y=7
     static_grid[:, 7] = Tile.WALL.value
-    # Right wall at x=13
-    static_grid[13, :] = Tile.WALL.value
 
     start_x, start_y = 10, 10
+    vision_range = 5
 
-    vision = get_vision_inputs(start_x, start_y, static_grid)
+    vision = get_vision_inputs(start_x, start_y, static_grid, vision_range)
 
-    # Expected distances
-    # N: (10,10) to (10,7) -> dist = 3
-    # NE: (10,10) to (13,7) -> dist = 3
-    # E: (10,10) to (13,10) -> dist = 3
+    # N (index 0): Wall is at y=7, so distance is 3.
+    # Expected value: 3 / 5 = 0.6
+    assert np.isclose(vision[0], 3.0 / vision_range)
 
-    max_dist = max(static_grid.shape)
+def test_get_vision_inputs_no_wall_in_range():
+    """Tests that vision returns 1.0 when no wall is found within range."""
+    static_grid = np.full((20, 20), Tile.EMPTY.value, dtype=int)
+    start_x, start_y = 10, 10
+    vision_range = 5
 
-    # N (index 0)
-    assert np.isclose(vision[0], 1.0 - (3 / max_dist))
-    # NE (index 1)
-    assert np.isclose(vision[1], 1.0 - (3 / max_dist))
-    # E (index 2)
-    assert np.isclose(vision[2], 1.0 - (3 / max_dist))
+    vision = get_vision_inputs(start_x, start_y, static_grid, vision_range)
 
-    # Test hitting the edge of the map
-    # Create a new empty map
-    static_grid_empty = np.full((20, 20), Tile.EMPTY.value, dtype=int)
-    start_x_edge, start_y_edge = 0, 0
-    vision_edge = get_vision_inputs(start_x_edge, start_y_edge, static_grid_empty)
+    # All directions should be 1.0 as no wall is in range
+    assert np.allclose(vision, 1.0)
 
-    # W, NW, N should all be 1.0 (hit edge immediately)
-    assert np.isclose(vision_edge[0], 1.0) # N
-    assert np.isclose(vision_edge[6], 1.0) # W
-    assert np.isclose(vision_edge[7], 1.0) # NW
+def test_get_vision_inputs_wall_at_max_range():
+    """Tests vision when a wall is exactly at the maximum vision range."""
+    static_grid = np.full((20, 20), Tile.EMPTY.value, dtype=int)
+    static_grid[10, 5] = Tile.WALL.value # Wall at y=5, dist=5
+    start_x, start_y = 10, 10
+    vision_range = 5
+
+    vision = get_vision_inputs(start_x, start_y, static_grid, vision_range)
+
+    # N (index 0): Wall is at y=5, so distance is 5.
+    # Expected value: 5 / 5 = 1.0
+    assert np.isclose(vision[0], 1.0)

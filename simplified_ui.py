@@ -39,11 +39,14 @@ class SimplifiedUI:
             self.sliders[name] = slider
             self.slider_labels[name] = (label, label_format)
             return y + 30
-        y_pos = create_slider('sim_speed', 'Sim Speed:', y_pos, 1, 32, 1, '{}x')
+
+        y_pos = create_slider('sps', 'Steps Per Second:', y_pos, 1, 1000, 60, '{}')
+        y_pos = create_slider('vision_radius', 'Vision Radius:', y_pos, 1, 15, 5, '{}')
         y_pos = create_slider('sim_length', 'Sim Length:', y_pos, 50, 1000, 100, '{}')
         y_pos = create_slider('population_size', 'Population:', y_pos, 10, 500, 100, '{}')
         y_pos = create_slider('mutation_rate', 'Mutation Rate:', y_pos, 0, 0.2, 0.05, '{:.2f}')
         y_pos += 10
+
         pygame_gui.elements.UILabel(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 20, 20)),
             text='MLP Hidden Layers:', manager=manager, container=self.controls_panel)
@@ -60,7 +63,8 @@ class SimplifiedUI:
     def get_current_settings(self):
         settings = {name: slider.get_current_value() for name, slider in self.sliders.items()}
         settings['mlp_arch_str'] = self.mlp_arch_input.get_text()
-        settings['sim_speed'] = int(settings['sim_speed'])
+        settings['sps'] = int(settings['sps'])
+        settings['vision_radius'] = int(settings['vision_radius'])
         settings['sim_length'] = int(settings['sim_length'])
         settings['population_size'] = int(settings['population_size'])
         return settings

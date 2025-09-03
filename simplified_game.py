@@ -63,7 +63,7 @@ class SimplifiedUnit:
 class SimplifiedGame:
     """Manages the overall state of the simplified simulation."""
     def __init__(self, width=40, height=30, population_size=100, mlp_arch_str="16",
-                 steps_per_gen=100, mutation_rate=0.05, static_grid=None):
+                 perception_radius=5, steps_per_gen=100, mutation_rate=0.05, static_grid=None):
         self.tile_map = TileMap(width, height, static_grid)
         self.units = []
         self.target = (width - 5, height // 2)
@@ -71,6 +71,7 @@ class SimplifiedGame:
         self.generation = 0
         self.fittest_brain = None
 
+        self.perception_radius = perception_radius
         self.steps_per_generation = steps_per_gen
         self.mutation_rate = mutation_rate
 
@@ -125,24 +126,30 @@ class SimplifiedGame:
         self.tile_map.update_dynamic_grid(self.units, self.target)
         print(f"Generation {self.generation} complete. Best fitness: {max(fitness_scores):.4f}")
 
-def get_vision_inputs(start_x, start_y, static_grid):
-    """Casts 8 rays to find distance to the nearest wall."""
+def get_vision_inputs(start_x, start_y, static_grid, vision_range):
+    """Casts 8 rays to find distance to the nearest wall within a given range."""
     directions = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)]
     vision_inputs = np.zeros(8)
     grid_width, grid_height = static_grid.shape
-    max_dist = max(grid_width, grid_height)
 
     for i, (dx, dy) in enumerate(directions):
         dist = 1
-        while True:
+        found_wall = False
+        while dist <= vision_range:
             check_x, check_y = start_x + dx * dist, start_y + dy * dist
             if not (0 <= check_x < grid_width and 0 <= check_y < grid_height):
-                vision_inputs[i] = 1.0 # Hit edge of map
+                vision_inputs[i] = dist / vision_range
+                found_wall = True
                 break
             if static_grid[check_x, check_y] == Tile.WALL.value:
-                vision_inputs[i] = 1.0 - (dist / max_dist)
+                vision_inputs[i] = dist / vision_range
+                found_wall = True
                 break
             dist += 1
+
+        if not found_wall:
+            vision_inputs[i] = 1.0 # No wall found, return max range
+
     return vision_inputs
 
 def determine_new_position(unit_x, unit_y, action, static_grid):
@@ -159,11 +166,11 @@ def determine_new_position(unit_x, unit_y, action, static_grid):
     return final_x, final_y
 
 def process_unit_logic(args):
-    unit_id, unit_x, unit_y, brain_weights, brain_biases, static_grid, target_pos, mlp_arch = args
+    unit_id, unit_x, unit_y, brain_weights, brain_biases, static_grid, target_pos, mlp_arch, perception_radius = args
     brain = MLP(mlp_arch)
     brain.weights, brain.biases = brain_weights, brain_biases
 
-    vision_inputs = get_vision_inputs(unit_x, unit_y, static_grid)
+    vision_inputs = get_vision_inputs(unit_x, unit_y, static_grid, perception_radius)
 
     dx_to_target = (target_pos[0] - unit_x) / static_grid.shape[0]
     dy_to_target = (target_pos[1] - unit_y) / static_grid.shape[1]
@@ -171,7 +178,7 @@ def process_unit_logic(args):
 
     inputs = np.concatenate((vision_inputs, target_inputs))
 
-    action_probs, _ = brain.forward(inputs) # We only need the final output here
+    action_probs, _ = brain.forward(inputs)
     action = Action(np.argmax(action_probs))
     final_x, final_y = determine_new_position(unit_x, unit_y, action, static_grid)
     return (unit_id, final_x, final_y)
