@@ -58,13 +58,13 @@ class DesignMenu:
         # --- UI Elements for Perception Types ---
         self.sense_wall_checkbox = pygame_gui.elements.UICheckBox(
             relative_rect=pygame.Rect((10, 170), (140, 25)), text="Sense Walls", manager=ui_manager, container=self.panel)
-        self.sense_wall_checkbox.select() # Start as checked
+        self.sense_wall_checkbox.is_selected = True
         self.sense_enemy_checkbox = pygame_gui.elements.UICheckBox(
             relative_rect=pygame.Rect((150, 170), (140, 25)), text="Sense Enemies", manager=ui_manager, container=self.panel)
-        self.sense_enemy_checkbox.select() # Start as checked
+        self.sense_enemy_checkbox.is_selected = True
         self.sense_unit_checkbox = pygame_gui.elements.UICheckBox(
             relative_rect=pygame.Rect((10, 200), (140, 25)), text="Sense Friendlies", manager=ui_manager, container=self.panel)
-        self.sense_unit_checkbox.select() # Start as checked
+        self.sense_unit_checkbox.is_selected = True
 
         # --- Action Buttons ---
         self.update_button = pygame_gui.elements.UIButton(
