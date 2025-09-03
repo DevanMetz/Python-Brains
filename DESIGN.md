@@ -104,3 +104,13 @@ To address this, a Quadtree was implemented to spatially partition the game worl
 -   **Optimized Perception:** Before a worker process is tasked with calculating a unit's inputs, the main process now queries the Quadtree for objects that are physically near the unit. Only this small, localized list of objects is passed to the worker, dramatically reducing the number of collision checks required for the unit's "whiskers". This change also significantly reduces the amount of data that needs to be pickled and sent to each process.
 -   **Optimized Projectile Collisions:** The projectile update loop was also modified to use the Quadtree. Instead of checking against all possible targets, projectiles now query the Quadtree to find nearby objects, making the combat simulation more efficient.
 -   **Debug Visualization:** A toggleable debug view was added to render the Quadtree's boundaries, allowing for easy visual verification of its state and behavior during runtime.
+
+## 9. Architecture V5: Rendering Performance Optimization
+While the previous optimizations focused on the simulation's computational bottlenecks (MLP forward pass and collision detection), the application's frame rate could still suffer with very large populations due to the rendering load. This version introduces an optimization to decouple the simulation rate from the rendering rate.
+
+-   **Decoupled Simulation and Rendering:** The core idea is to continue simulating the entire population of units but only render a small, user-defined subset of them. This drastically reduces the number of draw calls per frame, improving visual performance (FPS) without sacrificing the accuracy or scale of the underlying simulation.
+-   **Drawing the Fittest:** To provide the most useful visual information, the system is designed to draw the top N fittest units from the preceding generation. This allows the user to visually track the progress of the most successful individuals.
+-   **New UI Controls:** To manage this feature, the main simulation UI was updated with two new sliders:
+    -   **Population Size:** Allows the user to dynamically change the total number of units in the simulation.
+    -   **Drawn Units:** Allows the user to control how many of the fittest units are rendered on screen.
+-   **UI Refactoring:** To accommodate these new controls cleanly, the simulation-related UI elements were refactored from `main.py` into a dedicated `SimulationUI` class in `ui.py`.

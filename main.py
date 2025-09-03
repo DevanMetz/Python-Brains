@@ -3,7 +3,7 @@ import pygame_gui
 import sys
 from enum import Enum
 from trainer import TrainingSimulation, TrainingMode
-from ui import DesignMenu
+from ui import DesignMenu, SimulationUI
 from map import TileMap, Tile
 
 # --- Constants ---
@@ -38,13 +38,16 @@ def main():
     tile_map = TileMap(WORLD_WIDTH, WORLD_HEIGHT, TILE_SIZE)
 
     # --- Simulation Setup ---
+    population_size = 50
+    drawn_units = 10
+    steps_per_generation = 400
     trainer = TrainingSimulation(
-        population_size=50,
+        population_size=population_size,
         world_size=(WORLD_WIDTH, WORLD_HEIGHT),
         tile_map=tile_map
     )
+    trainer.num_to_draw = drawn_units # Set initial value
     step_counter = 0
-    steps_per_generation = 400 # Now a variable
     best_fitness = 0
     speed_index = 0
     simulation_speed = SPEED_LEVELS[speed_index]
@@ -52,46 +55,21 @@ def main():
     # --- Game State ---
     current_state = GameState.SIMULATION
 
-    # --- UI Elements ---
-    to_design_menu_button = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((WORLD_WIDTH - 220, 20), (200, 40)),
-        text='AI Design Menu', manager=ui_manager)
-
-    save_brain_button = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((WORLD_WIDTH - 220, 70), (200, 40)),
-        text='Save Fittest Brain', manager=ui_manager)
-
-    to_map_editor_button = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((WORLD_WIDTH - 220, 120), (200, 40)),
-        text='Map Editor', manager=ui_manager)
-
-    back_to_sim_button = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((WORLD_WIDTH - 220, 20), (200, 40)),
-        text='Back to Simulation', manager=ui_manager, visible=False)
-
-
+    # --- UI Setup ---
     design_menu = DesignMenu(
         rect=pygame.Rect((WORLD_WIDTH / 2 - 150, WORLD_HEIGHT / 2 - 230), (300, 460)),
         ui_manager=ui_manager)
 
-    # --- Training Mode Buttons ---
-    train_nav_button = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((20, WORLD_HEIGHT - 60), (150, 40)),
-        text='Train Navigation', manager=ui_manager)
-    train_combat_button = pygame_gui.elements.UIButton(
-        relative_rect=pygame.Rect((180, WORLD_HEIGHT - 60), (150, 40)),
-        text='Train Combat', manager=ui_manager)
-
-    # --- Simulation Length Slider ---
-    sim_length_label = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((WORLD_WIDTH - 230, WORLD_HEIGHT - 55), (80, 30)),
-        text='Steps:', manager=ui_manager)
-    sim_length_value_label = pygame_gui.elements.UILabel(
-        relative_rect=pygame.Rect((WORLD_WIDTH - 160, WORLD_HEIGHT - 55), (50, 30)),
-        text=str(steps_per_generation), manager=ui_manager)
-    sim_length_slider = pygame_gui.elements.UIHorizontalSlider(
-        relative_rect=pygame.Rect((WORLD_WIDTH - 230, WORLD_HEIGHT - 30), (200, 20)),
-        start_value=steps_per_generation, value_range=(100, 2000), manager=ui_manager)
+    simulation_ui = SimulationUI(
+        world_width=WORLD_WIDTH,
+        world_height=WORLD_HEIGHT,
+        ui_manager=ui_manager,
+        initial_params={
+            'population_size': population_size,
+            'drawn_units': drawn_units,
+            'steps_per_generation': steps_per_generation
+        }
+    )
 
 
     # --- Main Loop ---
@@ -128,16 +106,27 @@ def main():
                 elif event.ui_element == design_menu.whisker_length_slider:
                     length = int(event.value)
                     design_menu.whisker_length_value_label.set_text(str(length))
-                elif event.ui_element == sim_length_slider:
+                elif event.ui_element == simulation_ui.pop_size_slider:
+                    population_size = int(event.value)
+                    simulation_ui.pop_size_value_label.set_text(str(population_size))
+                    simulation_ui.update_drawn_units_range(population_size)
+                    trainer.set_population_size(population_size)
+                    best_fitness = 0
+                    step_counter = 0
+                elif event.ui_element == simulation_ui.drawn_units_slider:
+                    drawn_units = int(event.value)
+                    simulation_ui.drawn_units_value_label.set_text(str(drawn_units))
+                    trainer.num_to_draw = drawn_units
+                elif event.ui_element == simulation_ui.sim_length_slider:
                     steps_per_generation = int(event.value)
-                    sim_length_value_label.set_text(str(steps_per_generation))
+                    simulation_ui.sim_length_value_label.set_text(str(steps_per_generation))
 
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
-                if event.ui_element == to_design_menu_button:
+                if event.ui_element == simulation_ui.to_design_menu_button:
                     current_state = GameState.DESIGN_MENU
-                elif event.ui_element == to_map_editor_button:
+                elif event.ui_element == simulation_ui.to_map_editor_button:
                     current_state = GameState.MAP_EDITOR
-                elif event.ui_element == back_to_sim_button:
+                elif event.ui_element == simulation_ui.back_to_sim_button:
                     current_state = GameState.SIMULATION
                 elif event.ui_element == design_menu.update_button:
                     num_whiskers = int(design_menu.whisker_slider.get_current_value())
@@ -154,16 +143,16 @@ def main():
                         current_state = GameState.SIMULATION
                 elif event.ui_element == design_menu.close_button:
                     current_state = GameState.SIMULATION
-                elif event.ui_element == save_brain_button:
+                elif event.ui_element == simulation_ui.save_brain_button:
                     trainer.save_fittest_brain()
                 elif event.ui_element == design_menu.load_button:
                     trainer.load_brain_from_file()
                     current_state = GameState.SIMULATION
-                elif event.ui_element == train_nav_button:
+                elif event.ui_element == simulation_ui.train_nav_button:
                     if trainer.training_mode != TrainingMode.NAVIGATE:
                         trainer.training_mode = TrainingMode.NAVIGATE
                         trainer.evolve_population()
-                elif event.ui_element == train_combat_button:
+                elif event.ui_element == simulation_ui.train_combat_button:
                     if trainer.training_mode != TrainingMode.COMBAT:
                         trainer.training_mode = TrainingMode.COMBAT
                         trainer.evolve_population()
@@ -184,27 +173,13 @@ def main():
 
         # --- Game State Logic and UI Visibility ---
         if current_state == GameState.DESIGN_MENU:
-            to_design_menu_button.hide()
-            save_brain_button.hide()
-            to_map_editor_button.hide()
-            back_to_sim_button.hide()
-            train_nav_button.hide()
-            train_combat_button.hide()
-            sim_length_label.hide()
-            sim_length_slider.hide()
-            sim_length_value_label.hide()
+            simulation_ui.hide()
+            simulation_ui.back_to_sim_button.hide()
             design_menu.show()
         elif current_state == GameState.SIMULATION:
             design_menu.hide()
-            back_to_sim_button.hide()
-            to_design_menu_button.show()
-            save_brain_button.show()
-            to_map_editor_button.show()
-            train_nav_button.show()
-            train_combat_button.show()
-            sim_length_label.show()
-            sim_length_slider.show()
-            sim_length_value_label.show()
+            simulation_ui.show()
+            simulation_ui.back_to_sim_button.hide()
 
             for _ in range(simulation_speed):
                 if step_counter < steps_per_generation:
@@ -216,23 +191,16 @@ def main():
                     print(f"Generation: {trainer.generation}, Best Fitness: {best_fitness:.2f}")
                     break
         elif current_state == GameState.MAP_EDITOR:
-            to_design_menu_button.hide()
-            save_brain_button.hide()
-            to_map_editor_button.hide()
-            train_nav_button.hide()
-            train_combat_button.hide()
-            sim_length_label.hide()
-            sim_length_slider.hide()
-            sim_length_value_label.hide()
+            simulation_ui.hide()
             design_menu.hide()
-            back_to_sim_button.show()
+            simulation_ui.back_to_sim_button.show()
 
         # --- Drawing ---
         screen.fill(BLACK)
         if current_state == GameState.SIMULATION:
             tile_map.draw(screen) # Draw map behind units
             for obj in trainer.world_objects: obj.draw(screen)
-            for unit in trainer.population: unit.draw(screen)
+            for unit in trainer.get_drawable_units(): unit.draw(screen)
             for proj in trainer.projectiles: proj.draw(screen)
 
             # Draw the quadtree for debugging

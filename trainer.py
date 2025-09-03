@@ -139,6 +139,7 @@ class TrainingSimulation:
     """
     def __init__(self, population_size, world_size, tile_map, num_whiskers=7, perceivable_types=None, whisker_length=150):
         self.population_size = population_size
+        self.num_to_draw = population_size # Default to drawing all units
         self.world_width, self.world_height = world_size
         self.tile_map = tile_map
         self.generation = 0
@@ -169,6 +170,7 @@ class TrainingSimulation:
 
         # Create the initial population
         self.population = self._create_initial_population()
+        self.sorted_population = [] # For drawing the fittest units
         self.population_map = {unit.id: unit for unit in self.population}
 
         # Create the Quadtree for spatial partitioning
@@ -266,6 +268,18 @@ class TrainingSimulation:
                             obj.health = 100
                         break # Projectile is gone, stop checking this projectile
 
+    def get_drawable_units(self):
+        """
+        Returns the list of units that should be drawn on the screen.
+        If a sorted list of the previous generation is available, it returns the fittest.
+        Otherwise, it returns a slice of the current population.
+        """
+        if self.sorted_population:
+            return self.sorted_population[:self.num_to_draw]
+        else:
+            # Fallback for the very first generation before any fitness is calculated
+            return self.population[:self.num_to_draw]
+
     def evolve_population(self, elitism_frac=0.1, mutation_rate=0.05):
         """
         Evaluates fitness based on the current training mode and creates a new generation.
@@ -283,6 +297,7 @@ class TrainingSimulation:
                 fitness_scores.append((unit, fitness))
 
         fitness_scores.sort(key=lambda x: x[1], reverse=True)
+        self.sorted_population = [item[0] for item in fitness_scores]
         new_population = []
         num_elites = int(self.population_size * elitism_frac)
         elite_units = [item[0] for item in fitness_scores[:num_elites]]
@@ -338,6 +353,22 @@ class TrainingSimulation:
         self.enemy.health = 100
         for unit in self.population:
             unit.damage_dealt = 0
+        self.generation = 0
+
+    def set_population_size(self, new_size):
+        """
+        Updates the population size and resets the simulation.
+        """
+        print(f"Setting new population size to: {new_size}")
+        self.population_size = new_size
+        # The number of drawn units should not exceed the new population size
+        if self.num_to_draw > self.population_size:
+            self.num_to_draw = self.population_size
+
+        self.population = self._create_initial_population()
+        self.population_map = {unit.id: unit for unit in self.population}
+        self.projectiles = []
+        self.enemy.health = 100
         self.generation = 0
 
     def save_fittest_brain(self, filepath_prefix="saved_brains/brain"):
