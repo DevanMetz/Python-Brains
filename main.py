@@ -83,7 +83,7 @@ def main():
                     current_state = GameState.DESIGN_MENU
                 elif event.ui_element == design_menu.update_button:
                     num_whiskers = int(design_menu.whisker_slider.get_current_value())
-                    attack_enabled = design_menu.attack_checkbox.checked
+                    attack_enabled = design_menu.attack_checkbox.is_checked
                     perceivable_types = design_menu.get_perceivable_types()
 
                     num_inputs = num_whiskers * len(perceivable_types) + 2
