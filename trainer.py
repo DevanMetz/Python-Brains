@@ -110,8 +110,11 @@ class TrainingSimulation:
         num_elites = int(self.population_size * elitism_frac)
         elite_units = [item[0] for item in fitness_scores[:num_elites]]
         for elite_unit in elite_units:
-            # Create a new unit instance but keep the brain
-            new_unit = Unit(x=50, y=self.world_height / 2, brain=elite_unit.brain)
+            # Create a new unit instance but keep the brain and configuration
+            new_unit = Unit(
+                x=50, y=self.world_height / 2, brain=elite_unit.brain,
+                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types
+            )
             new_population.append(new_unit)
 
         # Crossover and Mutation
@@ -127,7 +130,10 @@ class TrainingSimulation:
             child_brain.mutate(mutation_rate=mutation_rate)
 
             # Add new unit with the child's brain to the population
-            new_unit = Unit(x=50, y=self.world_height / 2, brain=child_brain)
+            new_unit = Unit(
+                x=50, y=self.world_height / 2, brain=child_brain,
+                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types
+            )
             new_population.append(new_unit)
 
         self.population = new_population
