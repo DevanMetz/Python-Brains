@@ -4,7 +4,7 @@ import os
 import pygame
 from functools import partial
 from multiprocessing import Pool, cpu_count
-from game import Unit, Target, Wall, Enemy, line_circle_intersection
+from game import Unit, Target, Wall, Enemy
 from mlp_cupy import MLPCupy as MLP
 from map import Tile
 from quadtree import QuadTree, Rectangle
