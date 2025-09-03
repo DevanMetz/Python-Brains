@@ -2,28 +2,36 @@ import numpy as np
 import json
 import os
 import pygame
+import numpy as np
+import json
+import os
+import pygame
 from functools import partial
 from multiprocessing import Pool, cpu_count
 from game import Unit, Target, Wall, Enemy, line_circle_intersection
 from mlp import MLP
 from map import Tile
+from spatial_grid import SpatialGrid
 
 # --- Worker Function for Multiprocessing ---
 
 _tile_map_global = None
+_spatial_grid_global = None
+_world_data_map_global = None
 
-def init_worker(tile_map):
+
+def init_worker(tile_map, spatial_grid):
     """
     Initializer for each worker process.
-    Makes the tile_map a global variable in the worker.
+    Makes the tile_map and spatial_grid global variables in the worker.
     """
-    global _tile_map_global
+    global _tile_map_global, _spatial_grid_global
     _tile_map_global = tile_map
+    _spatial_grid_global = spatial_grid
 
-
-def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_data):
+def get_unit_inputs(unit_data, target_pos_data):
     """
-    A standalone version of the Unit.get_inputs method, modified to return debug info.
+    A standalone version of the Unit.get_inputs method, optimized with SpatialGrid.
     """
     unit_pos = pygame.Vector2(unit_data['position'])
     unit_angle = unit_data['angle']
@@ -36,8 +44,6 @@ def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_d
     whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
     whisker_debug_info = []
 
-    all_objects_data = world_objects_data + [d for d in population_data if d['id'] != unit_data['id']]
-
     for i, whisker_angle in enumerate(whisker_angles):
         abs_angle = unit_angle + whisker_angle
         start_point = unit_pos
@@ -47,6 +53,7 @@ def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_d
         detected_type = None
         closest_intersect_point = end_point
 
+        # --- Wall detection (unchanged) ---
         if "wall" in perceivable_types:
             dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
             steps = max(abs(dx), abs(dy))
@@ -64,7 +71,15 @@ def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_d
                     x += x_inc
                     y += y_inc
 
-        for obj_data in all_objects_data:
+        # --- Object detection (OPTIMIZED) ---
+        # Query the spatial grid to get a candidate set of object IDs
+        candidate_ids = _spatial_grid_global.query_line(start_point, end_point)
+
+        # Filter out the unit's own ID
+        candidate_ids.discard(unit_data['id'])
+
+        for obj_id in candidate_ids:
+            obj_data = _world_data_map_global[obj_id]
             dist = line_circle_intersection(start_point, end_point, pygame.Vector2(obj_data['position']), obj_data['size'])
             if dist is not None and dist < closest_dist:
                 closest_dist = dist
@@ -98,14 +113,16 @@ def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_d
     return final_inputs, whisker_debug_info
 
 
-def run_single_unit_step(unit_data, world_objects_data, population_data, target_position_data):
+def run_single_unit_step(unit_data, target_position_data, world_data_map):
     """
     The main worker function, refactored to accept static world data.
     """
+    # Make the full world data map available globally for this worker invocation
+    global _world_data_map_global
+    _world_data_map_global = world_data_map
+
     inputs, whisker_debug_info = get_unit_inputs(
         unit_data,
-        world_objects_data,
-        population_data,
         target_position_data
     )
 
@@ -137,11 +154,15 @@ class TrainingSimulation:
         self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "unit"]
         self.training_mode = TrainingMode.NAVIGATE
 
+        # The spatial grid is used to speed up object lookups.
+        # Cell size is a crucial parameter. A good starting point is a fraction of the whisker length.
+        self.spatial_grid = SpatialGrid(self.world_width, self.world_height, cell_size=50)
+
         # Initialize the multiprocessing pool
         # This creates a set of worker processes that will be reused across generations
-        # The initializer passes the tile_map to each worker just once
+        # The initializer passes the tile_map and spatial_grid to each worker just once
         try:
-            self.pool = Pool(processes=cpu_count(), initializer=init_worker, initargs=(self.tile_map,))
+            self.pool = Pool(processes=cpu_count(), initializer=init_worker, initargs=(self.tile_map, self.spatial_grid))
         except (OSError, ImportError):
             # Fallback for environments where multiprocessing is not fully supported (e.g. some web-based editors)
             print("Warning: Multiprocessing pool failed to initialize. Running in single-threaded mode.")
@@ -179,23 +200,35 @@ class TrainingSimulation:
         """
         Runs a single step of the simulation for the entire population using a multiprocessing pool.
         """
+        # --- Data Preparation ---
         world_objects_data = [obj.to_dict() for obj in self.world_objects]
-        target_pos_data = (self.target.position.x, self.target.position.y)
         population_data = [u.to_dict() for u in self.population]
+        all_objects_data = world_objects_data + population_data
+
+        # Create a dictionary mapping ID to data for fast lookups in the worker
+        world_data_map = {obj['id']: obj for obj in all_objects_data}
+
+        # --- Spatial Grid Update ---
+        self.spatial_grid.clear()
+        for obj_data in all_objects_data:
+            self.spatial_grid.register(obj_data)
+
+        # --- Multiprocessing ---
+        target_pos_data = (self.target.position.x, self.target.position.y)
 
         # Create a partial function with the data that is the same for all units.
         # This is far more efficient as this large data blob is only pickled once.
         worker_func = partial(run_single_unit_step,
-                              world_objects_data=world_objects_data,
-                              population_data=population_data,
-                              target_position_data=target_pos_data)
+                              target_position_data=target_pos_data,
+                              world_data_map=world_data_map)
 
         tasks = [u.to_dict() for u in self.population]
 
         if self.pool:
             results = self.pool.map(worker_func, tasks)
         else:
-            init_worker(self.tile_map)
+            # Single-threaded fallback
+            init_worker(self.tile_map, self.spatial_grid)
             results = [worker_func(task) for task in tasks]
 
         for result in results:
