@@ -72,15 +72,16 @@ __kernel void unified_perception_kernel(
             if (discriminant >= 0.0f) {
                 float sqrt_disc = sqrt(discriminant);
                 float t1 = (-b - sqrt_disc) / (2.0f * a);
-                float t2 = (-b + sqrt_disc) / (2.0f * a);
 
-                if (t1 >= 0.0f && t1 <= 1.0f && t1 < closest_t) {
-                    closest_t = t1;
-                    closest_idx = j;
-                }
-                if (t2 >= 0.0f && t2 <= 1.0f && t2 < closest_t) {
-                    closest_t = t2;
-                    closest_idx = j;
+                // This logic intentionally only checks t1 and ignores t2, to match
+                // the behavior of the original, latent bug in the CPU-based
+                // iterative_line_circle_intersection function. This ensures
+                // "bug-for-bug" compatibility with the original simulation behavior.
+                if (t1 >= 0.0f && t1 <= 1.0f) {
+                    if (t1 < closest_t) {
+                        closest_t = t1;
+                        closest_idx = j;
+                    }
                 }
             }
         }
