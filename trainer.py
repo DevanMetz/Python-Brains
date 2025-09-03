@@ -287,6 +287,7 @@ class TrainingSimulation:
         self.perception_cache['radii_buf'] = cl.Buffer(context, mf.READ_WRITE, size=max(1, max_circles * 4))
         self.perception_cache['out_distances_buf'] = cl.Buffer(context, mf.WRITE_ONLY, size=max(1, total_whiskers * 4))
         self.perception_cache['out_indices_buf'] = cl.Buffer(context, mf.WRITE_ONLY, size=max(1, total_whiskers * 4))
+        self.perception_cache['whisker_parent_indices_buf'] = cl.Buffer(context, mf.READ_WRITE, size=max(1, total_whiskers * 4))
         print("SUCCESS: Initialized OpenCL perception cache for batched processing.")
 
     def _create_initial_population(self):
@@ -321,6 +322,15 @@ class TrainingSimulation:
                 all_p2s[start_idx:end_idx] = all_p1s[start_idx:end_idx] + end_vectors
 
             circle_objects = [obj for obj in all_objects if isinstance(obj, (Unit, Enemy, Target))]
+            # Create a mapping from a unit's ID to its index in the circle_objects list
+            circle_indices_map = {obj.id: i for i, obj in enumerate(circle_objects) if isinstance(obj, Unit)}
+
+            all_whisker_parent_indices = np.empty(total_whiskers, dtype=np.int32)
+            for i, unit in enumerate(self.population):
+                start_idx, end_idx = i * self.num_whiskers, (i + 1) * self.num_whiskers
+                parent_circle_idx = circle_indices_map.get(unit.id, -1) # -1 if not found
+                all_whisker_parent_indices[start_idx:end_idx] = parent_circle_idx
+
             if circle_objects:
                 centers_np = np.array([o.position for o in circle_objects], dtype=np.float32)
                 radii_np = np.array([o.size for o in circle_objects], dtype=np.float32)
@@ -332,6 +342,7 @@ class TrainingSimulation:
             cl.enqueue_copy(queue, self.perception_cache['p2s_buf'], all_p2s, is_blocking=False)
             cl.enqueue_copy(queue, self.perception_cache['centers_buf'], centers_np, is_blocking=False)
             cl.enqueue_copy(queue, self.perception_cache['radii_buf'], radii_np, is_blocking=False)
+            cl.enqueue_copy(queue, self.perception_cache['whisker_parent_indices_buf'], all_whisker_parent_indices, is_blocking=False)
 
             detect_walls = "wall" in self.perceivable_types
             detect_circles = any(t in self.perceivable_types for t in ["enemy", "target", "unit"])
@@ -339,6 +350,7 @@ class TrainingSimulation:
             kernel_event = opencl_unified_perception(
                 queue, self.perception_cache['p1s_buf'], self.perception_cache['p2s_buf'], self.perception_cache['centers_buf'], self.perception_cache['radii_buf'],
                 self.perception_cache['out_distances_buf'], self.perception_cache['out_indices_buf'],
+                self.perception_cache['whisker_parent_indices_buf'],
                 total_whiskers, len(circle_objects), self.tile_map_buf, self.tile_map.grid_width, self.tile_map.tile_size,
                 detect_circles, detect_walls
             )

@@ -22,6 +22,7 @@ __kernel void unified_perception_kernel(
     // Whisker data
     __global const float2 *p1s,
     __global const float2 *p2s,
+    __global const int *whisker_parent_indices,
 
     // Circle object data
     __global const float2 *centers,
@@ -56,6 +57,12 @@ __kernel void unified_perception_kernel(
         float closest_t = INFINITY;
 
         for (int j = 0; j < num_circles; ++j) {
+            // Skip self-intersection check: if the whisker's parent index in the
+            // circle array is the same as the circle we are checking, skip it.
+            if (whisker_parent_indices[i] == j) {
+                continue;
+            }
+
             float2 f = p1 - centers[j];
             float a = line_length_sq;
             float b = 2.0f * dot(f, d);
@@ -171,6 +178,7 @@ if OPENCL_AVAILABLE:
 def opencl_unified_perception(
     queue,
     p1s_buf, p2s_buf, centers_buf, radii_buf, out_distances_buf, out_indices_buf,
+    whisker_parent_indices_buf,
     num_whiskers, num_circles,
     tile_map_buf, map_width_tiles, tile_size,
     detect_circles=True, detect_walls=True
@@ -214,7 +222,7 @@ def opencl_unified_perception(
     # The caller is responsible for waiting on the returned event.
     return unified_perception_kernel(
         queue, (num_whiskers,), None,
-        p1s_buf, p2s_buf,
+        p1s_buf, p2s_buf, whisker_parent_indices_buf,
         centers_buf, radii_buf, np.int32(num_circles),
         tile_map_buf, np.int32(map_width_tiles), np.int32(tile_size),
         np.int32(detect_circles), np.int32(detect_walls),
