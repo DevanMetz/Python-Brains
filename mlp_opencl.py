@@ -61,9 +61,11 @@ __kernel void forward_layer(
 """
 
 # Compile the kernel globally if OpenCL is available
+forward_layer_kernel = None
 if OPENCL_AVAILABLE:
     try:
         program = cl.Program(context, kernel_code).build()
+        forward_layer_kernel = program.forward_layer
     except cl.Error as e:
         print(f"ERROR: Failed to compile OpenCL kernel: {e}")
         # Disable OpenCL if compilation fails
@@ -120,7 +122,7 @@ class MLPOpenCL(MLP):
                 output_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=output_size * np.dtype(np.float32).itemsize)
                 temp_buffers.append(output_buf)
 
-                program.forward_layer(
+                forward_layer_kernel(
                     queue, (output_size,), None,
                     input_buf, weights_buf, biases_buf, output_buf,
                     np.int32(input_size), np.int32(output_size)

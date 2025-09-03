@@ -93,9 +93,11 @@ __kernel void intersection_kernel(
 """
 
 program = None
+intersection_kernel = None
 if OPENCL_AVAILABLE:
     try:
         program = cl.Program(context, kernel_code).build()
+        intersection_kernel = program.intersection_kernel
     except cl.Error as e:
         print(f"ERROR: Failed to compile OpenCL math kernel: {e}")
         program = None
@@ -107,7 +109,7 @@ def opencl_vectorized_line_circle_intersection(p1s_np, p2s_np, centers_np, radii
     This function handles the data transfer to and from the GPU and executes
     the compiled OpenCL kernel.
     """
-    if not program or not OPENCL_AVAILABLE:
+    if not intersection_kernel or not OPENCL_AVAILABLE:
         raise RuntimeError("OpenCL is not available or the kernel has not been compiled.")
 
     num_whiskers = p1s_np.shape[0]
@@ -133,7 +135,7 @@ def opencl_vectorized_line_circle_intersection(p1s_np, p2s_np, centers_np, radii
     min_indices_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=num_whiskers * np.dtype(np.int32).itemsize)
 
     # Execute the kernel
-    program.intersection_kernel(
+    intersection_kernel(
         queue, (num_whiskers,), None, # Global work size is the number of whiskers
         p1s_buf,
         p2s_buf,

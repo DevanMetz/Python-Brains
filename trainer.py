@@ -630,7 +630,7 @@ class TrainingSimulation:
 
     def clear_worker_caches(self):
         """Sends a task to each worker to clear its GPU cache."""
-        if self.pool and CUPY_AVAILABLE:
+        if self.pool and OPENCL_AVAILABLE:
             # The argument to map is an iterable of inputs for the function.
             # We just need to run the function once for each worker.
             num_workers = self.pool._processes
