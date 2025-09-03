@@ -23,8 +23,9 @@ class TrainingSimulation:
         self.training_mode = TrainingMode.NAVIGATE
 
         # Define the MLP architecture
-        # The number of inputs depends on the number of whiskers and perceivable types
-        num_inputs = self.num_whiskers * len(self.perceivable_types) + 2 # whiskers * types + velocity + angle
+        # The number of inputs depends on whiskers, perceivable types, and now the target vector
+        # whiskers * types + velocity + angle + target_dx + target_dy
+        num_inputs = self.num_whiskers * len(self.perceivable_types) + 2 + 2
         self.mlp_architecture = [num_inputs, 16, 2]
 
         # Create world objects (dynamic objects, walls are handled by the map)
@@ -56,7 +57,7 @@ class TrainingSimulation:
         """
         # Update units
         for unit in self.population:
-            inputs = unit.get_inputs(self.world_objects)
+            inputs = unit.get_inputs(self.world_objects, self.target)
             actions = unit.brain.forward(inputs)
             unit.update(actions, self.projectiles)
             unit.position.x = np.clip(unit.position.x, 0, self.world_width)

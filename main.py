@@ -124,7 +124,8 @@ def main():
                     whisker_length = int(design_menu.whisker_length_slider.get_current_value())
                     attack_enabled = design_menu.attack_checkbox.is_checked
                     perceivable_types = design_menu.get_perceivable_types()
-                    num_inputs = num_whiskers * len(perceivable_types) + 2
+                    # whiskers * types + velocity + angle + target_dx + target_dy
+                    num_inputs = num_whiskers * len(perceivable_types) + 2 + 2
                     num_outputs = 3 if attack_enabled else 2
                     new_arch = design_menu.get_architecture_from_input(input_nodes=num_inputs, output_nodes=num_outputs)
                     if new_arch:

@@ -33,10 +33,9 @@ class Unit:
             self.whisker_angles = np.array([0]) # Single whisker facing forward
         self.whisker_debug_info = [] # To store data for drawing
 
-    def get_inputs(self, world_objects):
+    def get_inputs(self, world_objects, target):
         """
-        Calculates inputs for the MLP brain using typed whisker perception.
-        Detects walls from the tilemap and other objects from the world_objects list.
+        Calculates inputs for the MLP brain, including whisker data and target vector.
         """
         self.whisker_debug_info = []
         num_perceivables = len(self.perceivable_types)
@@ -92,9 +91,19 @@ class Unit:
                 type_index = self.perceivable_types.index(detected_type)
                 whisker_inputs[i, type_index] = 1.0 - (closest_dist / self.whisker_length)
 
+        # --- Calculate relative target vector ---
+        relative_vec = target.position - self.position
+        # Rotate vector to be relative to the unit's orientation
+        relative_vec = relative_vec.rotate(-np.rad2deg(self.angle))
+        # Normalize
+        norm_dx = relative_vec.x / self.tile_map.pixel_width
+        norm_dy = relative_vec.y / self.tile_map.pixel_height
+        target_inputs = np.array([norm_dx, norm_dy])
+
+        # --- Concatenate all inputs ---
         flat_whisker_inputs = whisker_inputs.flatten()
         other_inputs = np.array([self.velocity.length() / self.speed, self.angle / (2 * np.pi)])
-        return np.concatenate((flat_whisker_inputs, other_inputs))
+        return np.concatenate((flat_whisker_inputs, other_inputs, target_inputs))
 
     def attack(self):
         """Creates and returns a new projectile if cooldown is over."""
