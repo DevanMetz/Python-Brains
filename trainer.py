@@ -21,7 +21,8 @@ from game import Unit, Target, Wall, Enemy
 from mlp_opencl import MLPOpenCL as MLP, OPENCL_AVAILABLE
 from map import Tile
 from quadtree import QuadTree, Rectangle
-from math_utils import iterative_line_circle_intersection
+from math_utils import iterative_line_circle_intersection, ray_cast_grid
+from map import Tile
 
 # Import OpenCL functions if available
 if OPENCL_AVAILABLE:
@@ -191,16 +192,12 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
             intersect_point = end_point
 
             if "wall" in perceivable_types:
-                dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
-                steps = int(max(abs(dx), abs(dy)))
-                if steps > 0:
-                    x_inc, y_inc = dx / steps, dy / steps
-                    for j in range(steps):
-                        x, y = start_point.x + j * x_inc, start_point.y + j * y_inc
-                        if _tile_map_global.get_tile_at_pixel(x,y) == Tile.WALL:
-                            closest_dist = unit_pos.distance_to(pygame.Vector2(x,y))
-                            detected_type = "wall"
-                            break
+                wall_hit_point = ray_cast_grid(start_point, end_point, _tile_map_global)
+                if wall_hit_point:
+                    dist = unit_pos.distance_to(wall_hit_point)
+                    if dist < closest_dist:
+                        closest_dist = dist
+                        detected_type = "wall"
 
             for obj_data in local_objects_data:
                 dist = iterative_line_circle_intersection(start_point, end_point, pygame.Vector2(obj_data['position']), obj_data['size'])
