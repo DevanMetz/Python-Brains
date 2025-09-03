@@ -100,7 +100,7 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
                 clamped_dist = max(0, min(dist, whisker_length))
                 whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
 
-    except (ImportError, cp.cuda.runtime.CudaError):
+    except Exception:
         # --- Fallback to original iterative method ---
         from math_utils import iterative_line_circle_intersection
         for i, whisker_angle in enumerate(whisker_angles):
