@@ -55,12 +55,16 @@ def init_worker(tile_map):
 
     # Pre-upload the tile map to the GPU for this worker
     if OPENCL_AVAILABLE:
-        # The grid contains Tile enums, so we must convert them to their integer values.
-        # It's also (width, height), but we need row-major (height, width) for the kernel.
-        # So we convert to int, then transpose, then flatten.
-        map_data = _tile_map_global.grid.astype(int).T.flatten()
+        # The grid contains Tile enums. The most robust way to convert to their
+        # integer values is to use a vectorized function.
+        get_tile_value = np.vectorize(lambda t: t.value)
+        int_grid = get_tile_value(_tile_map_global.grid)
+
+        # The grid is (width, height), but we need row-major (height, width) for the kernel.
+        # So we transpose, then flatten.
+        map_data = int_grid.T.flatten().astype(np.int32)
         # Create a read-only buffer on the GPU
-        _tile_map_buf_global = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=map_data.astype(np.int32))
+        _tile_map_buf_global = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=map_data)
 
 
 def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
