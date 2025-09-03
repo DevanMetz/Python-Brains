@@ -82,23 +82,67 @@ __kernel void unified_perception_kernel(
         }
     }
 
-    // --- Part 2: Wall Intersection (Conditional) ---
+    // --- Part 2: Wall Intersection (DDA Algorithm) ---
     float wall_dist = INFINITY;
-    if (detect_walls != 0) {
-        float dist = length(d);
-        int steps = (int)dist;
-        if (steps > 0) {
-            float2 step_vec = d / (float)steps;
-            for (int j = 1; j <= steps; ++j) {
-                float2 current_pos = p1 + step_vec * (float)j;
-                int grid_x = (int)(current_pos.x / tile_size);
-                int grid_y = (int)(current_pos.y / tile_size);
-                int tile_index = grid_y * map_width_tiles + grid_x;
+    if (detect_walls != 0 && line_length_sq > 0.0f) {
+        float2 dir = normalize(d);
+        // This check is important to avoid division by zero for vertical/horizontal lines
+        if (dir.x == 0.0f) dir.x = 1e-8f;
+        if (dir.y == 0.0f) dir.y = 1e-8f;
 
+        float2 delta_dist = fabs((float2)(1.0f, 1.0f) / dir);
+        int2 map_coords = (int2)(floor(p1.x / tile_size), floor(p1.y / tile_size));
+        float2 side_dist;
+        int2 step_dir;
+
+        if (dir.x < 0) {
+            step_dir.x = -1;
+            side_dist.x = (p1.x - (float)map_coords.x * tile_size) * delta_dist.x;
+        } else {
+            step_dir.x = 1;
+            side_dist.x = (((float)map_coords.x + 1.0f) * tile_size - p1.x) * delta_dist.x;
+        }
+
+        if (dir.y < 0) {
+            step_dir.y = -1;
+            side_dist.y = (p1.y - (float)map_coords.y * tile_size) * delta_dist.y;
+        } else {
+            step_dir.y = 1;
+            side_dist.y = (((float)map_coords.y + 1.0f) * tile_size - p1.y) * delta_dist.y;
+        }
+
+        float line_length = sqrt(line_length_sq);
+        float traveled_dist = 0.0f;
+
+        // A proper implementation would pass map_height_tiles.
+        // We use a generous loop limit to prevent infinite loops on malformed input.
+        int max_iter = 2 * (int)(line_length / tile_size + 2);
+
+        for(int k=0; k < max_iter; ++k) {
+            if (side_dist.x < side_dist.y) {
+                traveled_dist = side_dist.x;
+                side_dist.x += delta_dist.x;
+                map_coords.x += step_dir.x;
+            } else {
+                traveled_dist = side_dist.y;
+                side_dist.y += delta_dist.y;
+                map_coords.y += step_dir.y;
+            }
+
+            if (traveled_dist > line_length) {
+                break; // Gone past the end of the whisker
+            }
+
+            if (map_coords.x >= 0 && map_coords.x < map_width_tiles && map_coords.y >=0) {
+                int tile_index = map_coords.y * map_width_tiles + map_coords.x;
+                // Note: Assumes tile_map_data is large enough. A robust implementation
+                // would also check against map_height_tiles.
                 if (tile_map_data[tile_index] == 1) { // 1 == Tile.WALL
-                    wall_dist = length(current_pos - p1);
-                    break; // Found first wall, can stop checking
+                    wall_dist = traveled_dist;
+                    break;
                 }
+            } else {
+                break; // Ray is out of bounds
             }
         }
     }
@@ -124,58 +168,55 @@ if OPENCL_AVAILABLE:
         print(f"ERROR: Failed to compile OpenCL math kernel: {e}")
         program = None
 
-def opencl_unified_perception(p1s_np, p2s_np, centers_np, radii_np, tile_map_buf, map_width_tiles, tile_size, detect_circles=True, detect_walls=True):
+def opencl_unified_perception(
+    queue,
+    p1s_buf, p2s_buf, centers_buf, radii_buf, out_distances_buf, out_indices_buf,
+    num_whiskers, num_circles,
+    tile_map_buf, map_width_tiles, tile_size,
+    detect_circles=True, detect_walls=True
+):
     """
-    Python wrapper for the unified OpenCL perception kernel.
+    Executes the unified OpenCL perception kernel with pre-allocated buffers.
+
+    This function is designed for high-performance scenarios. It assumes that
+    all OpenCL buffers have been created and that the necessary data has
+    already been copied to the device. It only enqueues the kernel execution
+    and does not handle buffer creation, data transfer, or synchronization.
+
+    Args:
+        queue (cl.CommandQueue): The OpenCL command queue.
+        p1s_buf (cl.Buffer): Buffer for whisker start points.
+        p2s_buf (cl.Buffer): Buffer for whisker end points.
+        centers_buf (cl.Buffer): Buffer for circle center points.
+        radii_buf (cl.Buffer): Buffer for circle radii.
+        out_distances_buf (cl.Buffer): Output buffer for intersection distances.
+        out_indices_buf (cl.Buffer): Output buffer for intersection indices.
+        num_whiskers (int): The total number of whiskers to process.
+        num_circles (int): The total number of circles to check against.
+        tile_map_buf (cl.Buffer): Buffer for the static wall tile map.
+        map_width_tiles (int): The width of the map in tiles.
+        tile_size (int): The size of each tile in pixels.
+        detect_circles (bool): Flag to enable/disable circle detection.
+        detect_walls (bool): Flag to enable/disable wall detection.
+
+    Returns:
+        cl.Event: The event object associated with the kernel execution.
     """
     if not unified_perception_kernel or not OPENCL_AVAILABLE:
         raise RuntimeError("OpenCL is not available or the unified kernel has not been compiled.")
 
-    # If nothing is being detected, return empty results immediately.
+    # If nothing is being detected, we don't need to launch the kernel.
+    # The caller is responsible for handling the empty results.
     if not detect_circles and not detect_walls:
-        return np.full(p1s_np.shape[0], np.inf, dtype=np.float32), np.full(p1s_np.shape[0], -1, dtype=np.int32)
-
-    num_whiskers = p1s_np.shape[0]
-    num_circles = centers_np.shape[0]
-
-    # --- Create Buffers ---
-    p1s_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=p1s_np.astype(np.float32))
-    p2s_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=p2s_np.astype(np.float32))
-
-    # Handle case where there are no circles to avoid creating a zero-size buffer
-    if num_circles > 0:
-        centers_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=centers_np.astype(np.float32))
-        radii_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=radii_np.astype(np.float32))
-    else:
-        # Create dummy buffers of size 1, they won't be read by the kernel since num_circles is 0
-        centers_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY, 1)
-        radii_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY, 1)
-
-    out_distances_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=num_whiskers * np.dtype(np.float32).itemsize)
-    out_indices_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=num_whiskers * np.dtype(np.int32).itemsize)
+        return None
 
     # --- Execute Kernel ---
-    unified_perception_kernel(
+    # The caller is responsible for waiting on the returned event.
+    return unified_perception_kernel(
         queue, (num_whiskers,), None,
         p1s_buf, p2s_buf,
         centers_buf, radii_buf, np.int32(num_circles),
         tile_map_buf, np.int32(map_width_tiles), np.int32(tile_size),
         np.int32(detect_circles), np.int32(detect_walls),
         out_distances_buf, out_indices_buf
-    ).wait()
-
-    # --- Read Results ---
-    out_distances_np = np.empty(num_whiskers, dtype=np.float32)
-    out_indices_np = np.empty(num_whiskers, dtype=np.int32)
-    cl.enqueue_copy(queue, out_distances_np, out_distances_buf)
-    cl.enqueue_copy(queue, out_indices_np, out_indices_buf)
-
-    # --- Release Buffers ---
-    p1s_buf.release()
-    p2s_buf.release()
-    centers_buf.release()
-    radii_buf.release()
-    out_distances_buf.release()
-    out_indices_buf.release()
-
-    return out_distances_np, out_indices_np
+    )
