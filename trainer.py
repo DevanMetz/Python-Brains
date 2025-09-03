@@ -147,7 +147,7 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
                 centers_np=centers_np,
                 radii_np=radii_np,
                 tile_map_buf=_tile_map_buf_global,
-                map_width_tiles=_tile_map_global.width,
+                map_width_tiles=_tile_map_global.grid_width,
                 tile_size=_tile_map_global.tile_size,
                 detect_circles=detect_circles,
                 detect_walls=detect_walls
