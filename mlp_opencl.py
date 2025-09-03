@@ -13,23 +13,20 @@ from mlp import MLP
 
 # --- OpenCL Initialization ---
 OPENCL_AVAILABLE = False
+context = None
+queue = None
+program = None
+
 try:
     # Create a context by trying to find any available GPU platform/device.
-    # This is the most common use case.
     context = cl.create_some_context(interactive=False)
     queue = cl.CommandQueue(context)
     OPENCL_AVAILABLE = True
     print("SUCCESS: PyOpenCL found a compatible GPU and created a context.")
-except cl.Error as e:
+except Exception as e:
     # This will catch errors like "no devices found" or other OpenCL issues.
     print(f"WARNING: PyOpenCL could not initialize. GPU acceleration will be disabled. Error: {e}")
-    context = None
-    queue = None
-except Exception as e:
-    # Catch other potential non-OpenCL errors during setup.
-    print(f"WARNING: An unexpected error occurred during PyOpenCL initialization: {e}")
-    context = None
-    queue = None
+    OPENCL_AVAILABLE = False
 
 
 # --- OpenCL Kernel for a single layer's forward pass ---
@@ -63,26 +60,25 @@ __kernel void forward_layer(
 }
 """
 
+# Compile the kernel globally if OpenCL is available
+if OPENCL_AVAILABLE:
+    try:
+        program = cl.Program(context, kernel_code).build()
+    except cl.Error as e:
+        print(f"ERROR: Failed to compile OpenCL kernel: {e}")
+        # Disable OpenCL if compilation fails
+        OPENCL_AVAILABLE = False
+        program = None
+
 class MLPOpenCL(MLP):
     """
     An MLP that uses OpenCL for GPU-accelerated forward passes.
 
     Inherits from the base MLP class to reuse the weight/bias initialization
     and the genetic algorithm methods (crossover, mutation). The `forward`
-    method is overridden to use the GPU.
+    method is overridden to use the GPU. This class is now picklable as it
+    does not hold any non-picklable OpenCL objects as attributes.
     """
-    def __init__(self, layer_sizes):
-        super().__init__(layer_sizes)
-        self.program = None
-        if OPENCL_AVAILABLE:
-            try:
-                # Compile the OpenCL kernel
-                self.program = cl.Program(context, kernel_code).build()
-            except cl.Error as e:
-                print(f"ERROR: Failed to compile OpenCL kernel: {e}")
-                # Disable OpenCL for this instance if compilation fails
-                self.program = None
-
     def forward(self, inputs, *, cached_buffers=None):
         """
         Performs a forward pass using OpenCL, with an option for cached buffers.
@@ -97,7 +93,7 @@ class MLPOpenCL(MLP):
         Returns:
             np.ndarray: The output vector from the network.
         """
-        if not OPENCL_AVAILABLE or not self.program:
+        if not OPENCL_AVAILABLE or not program:
             return super().forward(inputs)
 
         try:
@@ -124,7 +120,7 @@ class MLPOpenCL(MLP):
                 output_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=output_size * np.dtype(np.float32).itemsize)
                 temp_buffers.append(output_buf)
 
-                self.program.forward_layer(
+                program.forward_layer(
                     queue, (output_size,), None,
                     input_buf, weights_buf, biases_buf, output_buf,
                     np.int32(input_size), np.int32(output_size)
