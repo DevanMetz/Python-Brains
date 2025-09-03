@@ -119,9 +119,16 @@ def iterative_line_circle_intersection(p1, p2, circle_center, radius):
         t1 = (-b - discriminant) / (2*a)
         t2 = (-b + discriminant) / (2*a)
 
-        # Check if the intersection points are on the line segment
+        # Find the valid intersection points on the line segment [0, 1]
+        valid_ts = []
         if 0 <= t1 <= 1:
-            # t1 is an intersection on the segment
-            return p1.distance_to(p1 + t1 * d)
-        # We don't care about t2 if t1 is valid, as t1 will be closer
-        return None
+            valid_ts.append(t1)
+        if 0 <= t2 <= 1:
+            valid_ts.append(t2)
+
+        if not valid_ts:
+            return None
+
+        # Return the distance to the closest valid intersection point
+        closest_t = min(valid_ts)
+        return p1.distance_to(p1 + closest_t * d)
