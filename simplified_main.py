@@ -119,13 +119,19 @@ def main():
                         current_state = GameState.SIMULATING
                         ui.show_simulation_ui()
                 elif event.ui_element == ui.apply_button:
+                    # Preserve the current map and target when restarting
+                    current_map = game.tile_map.static_grid.copy()
+                    current_target = game.target
                     game = SimplifiedGame(
                         width=GRID_WIDTH, height=GRID_HEIGHT,
-                        population_size=POPULATION_SIZE,
+                        population_size=settings['population_size'],
                         mlp_arch_str=settings['mlp_arch_str'],
                         perception_radius=settings['vision_radius'],
-                        steps_per_gen=settings['sim_length']
+                        steps_per_gen=settings['sim_length'],
+                        mutation_rate=settings['mutation_rate'],
+                        static_grid=current_map
                     )
+                    game.target = current_target
                     step_counter = 0
 
             ui_manager.process_events(event)
@@ -170,6 +176,10 @@ def main():
                     break
 
         ui_manager.update(time_delta)
+
+        if game.fittest_brain:
+            ui.draw_fittest_brain(game.fittest_brain)
+
         screen.fill(BLACK)
         draw_tile_map(screen, game)
         draw_dynamic_elements(screen, game, settings)
