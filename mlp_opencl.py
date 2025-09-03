@@ -110,7 +110,8 @@ class MLPOpenCL(MLP):
         if not forward_layer_kernel or not cached_buffers:
             # Fallback to the slower, CPU-based NumPy implementation if the
             # OpenCL kernel isn't ready or if cached buffers aren't provided.
-            return super().forward(inputs)
+            output, _ = super().forward(inputs)
+            return output
 
         try:
             weights_bufs = cached_buffers['weights']
@@ -153,4 +154,5 @@ class MLPOpenCL(MLP):
 
         except (cl.Error, KeyError) as e:
             print(f"ERROR: An OpenCL error or a key error occurred during the optimized forward pass: {e}. Falling back to NumPy.")
-            return super().forward(inputs)
+            output, _ = super().forward(inputs)
+            return output

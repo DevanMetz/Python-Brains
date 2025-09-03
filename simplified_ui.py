@@ -70,10 +70,10 @@ class SimplifiedUI:
             value = self.sliders[name].get_current_value()
             label.set_text(label_format.format(value))
 
-    def draw_fittest_brain(self, surface, brain):
+    def draw_fittest_brain(self, surface, brain, activations=None):
         surface.fill(pygame.Color("#303030"))
         input_labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "dX", "dY"]
-        draw_mlp(surface, brain, input_labels)
+        draw_mlp(surface, brain, input_labels, activations)
 
     def show_simulation_ui(self):
         self.mode_button.set_text('Enter Editor Mode')

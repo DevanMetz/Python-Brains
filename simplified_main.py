@@ -5,8 +5,9 @@ It uses Pygame for visualization and multiprocessing for parallel simulation.
 import pygame
 import pygame_gui
 import multiprocessing
+import numpy as np
 from enum import Enum
-from simplified_game import SimplifiedGame, Tile, process_unit_logic
+from simplified_game import SimplifiedGame, Tile, process_unit_logic, get_vision_inputs
 from simplified_ui import SimplifiedUI
 
 # --- Constants ---
@@ -34,25 +35,21 @@ def draw_game_world(surface, game):
     """Draws the entire game world (map and dynamic elements) onto a surface."""
     surface.fill(BLACK)
 
-    # Draw walls
     for x in range(game.tile_map.grid_width):
         for y in range(game.tile_map.grid_height):
             if game.tile_map.static_grid[x, y] == Tile.WALL.value:
                 rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
                 pygame.draw.rect(surface, WALL_COLOR, rect)
 
-    # Draw units with transparency
     unit_surface = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
     unit_surface.fill((*UNIT_COLOR, 180))
     for unit in game.units:
         rect = pygame.Rect(unit.x * TILE_SIZE, unit.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
         surface.blit(unit_surface, rect.topleft)
 
-    # Draw target
     target_rect = pygame.Rect(game.target[0] * TILE_SIZE, game.target[1] * TILE_SIZE, TILE_SIZE, TILE_SIZE)
     pygame.draw.rect(surface, TARGET_COLOR, target_rect)
 
-    # Draw grid lines
     for x in range(0, GRID_WIDTH * TILE_SIZE, TILE_SIZE):
         pygame.draw.line(surface, GRID_COLOR, (x, 0), (x, GRID_HEIGHT * TILE_SIZE))
     for y in range(0, GRID_HEIGHT * TILE_SIZE, TILE_SIZE):
@@ -64,18 +61,15 @@ def main():
     pygame.display.set_caption("Simplified CPU Simulation")
     clock = pygame.time.Clock()
 
-    # --- Define Layout Rects ---
     game_world_rect = pygame.Rect(0, 0, GRID_WIDTH * TILE_SIZE, GRID_HEIGHT * TILE_SIZE)
     controls_panel_rect = pygame.Rect(game_world_rect.right, 0, UI_WIDTH, SCREEN_HEIGHT - VISUALIZER_HEIGHT)
     visualizer_panel_rect = pygame.Rect(0, game_world_rect.bottom, SCREEN_WIDTH, VISUALIZER_HEIGHT)
 
     ui_manager = pygame_gui.UIManager((SCREEN_WIDTH, SCREEN_HEIGHT))
     ui = SimplifiedUI(rect=controls_panel_rect, manager=ui_manager)
-    visualizer_panel = pygame_gui.elements.UIPanel(
-        relative_rect=visualizer_panel_rect, manager=ui_manager, starting_height=1
-    )
-    game_world_surface = pygame.Surface(game_world_rect.size)
+    visualizer_panel = pygame_gui.elements.UIPanel(relative_rect=visualizer_panel_rect, manager=ui_manager)
 
+    game_world_surface = pygame.Surface(game_world_rect.size)
     game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT)
     step_counter = 0
     current_state = GameState.SIMULATING
@@ -105,8 +99,7 @@ def main():
                         mlp_arch_str=settings['mlp_arch_str'],
                         steps_per_gen=settings['sim_length'],
                         mutation_rate=settings['mutation_rate'],
-                        static_grid=current_map
-                    )
+                        static_grid=current_map)
                     game.target = current_target
                     step_counter = 0
 
@@ -140,8 +133,20 @@ def main():
         draw_game_world(game_world_surface, game)
         screen.blit(game_world_surface, game_world_rect.topleft)
 
-        if game.fittest_brain:
-            ui.draw_fittest_brain(visualizer_panel.image, game.fittest_brain)
+        live_activations = None
+        if game.fittest_brain and game.units:
+            # Get the state of the first unit (which is an elite) for visualization
+            fittest_unit = game.units[0]
+            vision_inputs = get_vision_inputs(fittest_unit.x, fittest_unit.y, game.tile_map.static_grid)
+            dx_to_target = (game.target[0] - fittest_unit.x) / game.tile_map.grid_width
+            dy_to_target = (game.target[1] - fittest_unit.y) / game.tile_map.grid_height
+            target_inputs = np.array([dx_to_target, dy_to_target])
+            inputs = np.concatenate((vision_inputs, target_inputs))
+
+            # Run a shadow forward pass to get activations for visualization
+            _, live_activations = game.fittest_brain.forward(inputs)
+
+        ui.draw_fittest_brain(visualizer_panel.image, game.fittest_brain, live_activations)
 
         ui_manager.update(time_delta)
         ui_manager.draw_ui(screen)

@@ -171,7 +171,7 @@ def process_unit_logic(args):
 
     inputs = np.concatenate((vision_inputs, target_inputs))
 
-    action_probs = brain.forward(inputs)
+    action_probs, _ = brain.forward(inputs) # We only need the final output here
     action = Action(np.argmax(action_probs))
     final_x, final_y = determine_new_position(unit_x, unit_y, action, static_grid)
     return (unit_id, final_x, final_y)

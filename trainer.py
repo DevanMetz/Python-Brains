@@ -303,7 +303,7 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data, br
             actions = brain.forward(inputs) # This will call the NumPy version
     else:
         # If OpenCL is not available, use the standard NumPy forward method.
-        actions = brain.forward(inputs)
+        actions, _ = brain.forward(inputs)
 
 
     return {

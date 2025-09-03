@@ -69,7 +69,7 @@ class MLP:
         return np.tanh(x)
 
     def forward(self, inputs):
-        """Performs a forward pass through the network to get an output.
+        """Performs a forward pass, returning final output and all activations.
 
         The input is propagated through each layer of the network. At each
         layer, a linear transformation (dot product with weights plus bias)
@@ -81,8 +81,10 @@ class MLP:
                 neurons.
 
         Returns:
-            np.ndarray: The output vector from the network, with shape (1, m)
-            where m is the number of output neurons.
+            tuple[np.ndarray, list[np.ndarray]]: A tuple containing:
+                - The final output vector from the network.
+                - A list of the activation arrays for each layer, including
+                  the input layer.
         """
         if not isinstance(inputs, np.ndarray):
             inputs = np.array(inputs)
@@ -91,6 +93,7 @@ class MLP:
         if inputs.ndim == 1:
             inputs = inputs.reshape(1, -1)
 
+        activations = [inputs]
         current_layer_output = inputs
 
         for i in range(len(self.weights)):
@@ -99,8 +102,9 @@ class MLP:
 
             # Apply activation function for all layers
             current_layer_output = self._tanh(z)
+            activations.append(current_layer_output)
 
-        return current_layer_output
+        return current_layer_output, activations
 
     @classmethod
     def crossover(cls, parent1, parent2):
