@@ -14,7 +14,7 @@ class SimplifiedUI:
         self.panel = pygame_gui.elements.UIPanel(
             relative_rect=rect,
             manager=manager,
-            starting_layer_height=1
+            starting_height=1
         )
 
         # --- UI Elements ---
