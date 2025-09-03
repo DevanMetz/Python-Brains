@@ -84,3 +84,13 @@ To solve the bottleneck, the simulation loop was re-architected to use Python's 
 -   **Efficient State Sharing:** To avoid the high overhead of sending the large `TileMap` object to every worker for every task, it is now passed once to each worker process upon its creation using the pool's `initializer` function.
 
 This change allows the simulation to scale with the number of CPU cores, leading to a dramatic reduction in the time required to train a generation of brains.
+
+### 8.3. GPU Acceleration with CuPy
+While `multiprocessing` effectively utilized multiple CPU cores, the MLP's forward pass, being a series of large matrix multiplications, remained a candidate for further optimization. To leverage the massive parallelism of modern GPUs, the CuPy library was integrated.
+
+-   **Targeted Optimization:** The optimization was specifically aimed at the `MLP.forward()` method. The weights and biases of the MLP, however, were kept as standard NumPy arrays.
+-   **Compatibility with `multiprocessing`:** A key challenge was that CuPy objects (representing data on the GPU) are not "picklable," meaning they cannot be easily sent between the processes in the multiprocessing pool.
+-   **Just-in-Time Data Transfer:** To solve this, a new `MLPCupy` class was created. In its overridden `forward` method, the NumPy inputs, weights, and biases are transferred to the GPU *at the beginning of the call* (`cupy.asarray`). The computation is performed entirely on the GPU, and the final result is transferred back to the CPU *at the end of the call* (`cupy.asnumpy`).
+-   **CPU Fallback:** The implementation includes a fallback mechanism. If CuPy is not installed or no compatible GPU is found, the system automatically reverts to the original, NumPy-based calculation, ensuring the application remains functional on all hardware.
+
+This hybrid approach allows the application to benefit from GPU acceleration for the most intensive calculations while maintaining full compatibility with the existing CPU-based parallel processing architecture.
