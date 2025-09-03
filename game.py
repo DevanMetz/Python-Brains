@@ -1,6 +1,7 @@
 import numpy as np
 import pygame
 from mlp import MLP
+from quadtree import Rectangle
 
 from map import Tile
 
@@ -52,6 +53,10 @@ class Unit:
             "whisker_length": self.whisker_length,
             "perceivable_types": self.perceivable_types,
         }
+
+    def get_bounding_box(self):
+        """Returns a Rectangle representing the unit's bounding box."""
+        return Rectangle(self.position.x, self.position.y, self.size * 2, self.size * 2)
 
     def get_inputs(self, world_objects, target):
         """
@@ -236,6 +241,10 @@ class Target:
             "type": self.type,
         }
 
+    def get_bounding_box(self):
+        """Returns a Rectangle representing the target's bounding box."""
+        return Rectangle(self.position.x, self.position.y, self.size * 2, self.size * 2)
+
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
 
@@ -258,6 +267,10 @@ class Enemy:
             "health": self.health,
         }
 
+    def get_bounding_box(self):
+        """Returns a Rectangle representing the enemy's bounding box."""
+        return Rectangle(self.position.x, self.position.y, self.size * 2, self.size * 2)
+
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
         # Draw health bar
@@ -278,6 +291,10 @@ class Projectile:
         self.lifespan = 150 # Frames
         self.owner = owner
 
+    def get_bounding_box(self):
+        """Returns a Rectangle representing the projectile's bounding box."""
+        return Rectangle(self.position.x, self.position.y, self.size * 2, self.size * 2)
+
     def update(self):
         self.position += self.velocity
         self.lifespan -= 1
@@ -285,59 +302,4 @@ class Projectile:
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
 
-# Helper functions for geometry
-
-def line_intersection(p0, p1, p2, p3):
-    """
-    Checks if line segment 'p0p1' and 'p2p3' intersect.
-    Returns the intersection point or None.
-    p0, p1, p2, p3 are tuples or pygame.Vector2
-    """
-    s1_x = p1[0] - p0[0]
-    s1_y = p1[1] - p0[1]
-    s2_x = p3[0] - p2[0]
-    s2_y = p3[1] - p2[1]
-
-    denominator = (-s2_x * s1_y + s1_x * s2_y)
-
-    if denominator == 0:
-        return None # Lines are parallel
-
-    s = (-s1_y * (p0[0] - p2[0]) + s1_x * (p0[1] - p2[1])) / denominator
-    t = ( s2_x * (p0[1] - p2[1]) - s2_y * (p0[0] - p2[0])) / denominator
-
-    if 0 <= s <= 1 and 0 <= t <= 1:
-        # Intersection detected
-        return pygame.Vector2(p0[0] + (t * s1_x), p0[1] + (t * s1_y))
-    return None
-
-def line_circle_intersection(p1, p2, circle_center, radius):
-    """
-    Calculates the intersection of a line segment and a circle.
-    Returns the distance from p1 to the closest intersection point, or None.
-    """
-    p1 = pygame.Vector2(p1)
-    p2 = pygame.Vector2(p2)
-    circle_center = pygame.Vector2(circle_center)
-
-    d = p2 - p1
-    f = p1 - circle_center
-
-    a = d.dot(d)
-    b = 2 * f.dot(d)
-    c = f.dot(f) - radius * radius
-
-    discriminant = b*b - 4*a*c
-    if discriminant < 0:
-        return None
-    else:
-        discriminant = np.sqrt(discriminant)
-        t1 = (-b - discriminant) / (2*a)
-        t2 = (-b + discriminant) / (2*a)
-
-        # Check if the intersection points are on the line segment
-        if 0 <= t1 <= 1:
-            # t1 is an intersection on the segment
-            return p1.distance_to(p1 + t1 * d)
-        # We don't care about t2 if t1 is valid, as t1 will be closer
-        return None
+# Helper functions for geometry have been moved to math_utils.py

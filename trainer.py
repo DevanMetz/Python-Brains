@@ -4,9 +4,10 @@ import os
 import pygame
 from functools import partial
 from multiprocessing import Pool, cpu_count
-from game import Unit, Target, Wall, Enemy, line_circle_intersection
-from mlp import MLP
+from game import Unit, Target, Wall, Enemy
+from mlp_cupy import MLPCupy as MLP
 from map import Tile
+from quadtree import QuadTree, Rectangle
 
 # --- Worker Function for Multiprocessing ---
 
@@ -21,9 +22,10 @@ def init_worker(tile_map):
     _tile_map_global = tile_map
 
 
-def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_data):
+def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     """
-    A standalone version of the Unit.get_inputs method, modified to return debug info.
+    Calculates MLP inputs. Uses a vectorized CuPy implementation for whisker-object
+    intersections if available, otherwise falls back to an iterative approach.
     """
     unit_pos = pygame.Vector2(unit_data['position'])
     unit_angle = unit_data['angle']
@@ -36,54 +38,133 @@ def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_d
     whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
     whisker_debug_info = []
 
-    all_objects_data = world_objects_data + [d for d in population_data if d['id'] != unit_data['id']]
+    try:
+        # Use CuPy for vectorized calculations if available
+        import cupy as cp
+        from math_utils import vectorized_line_circle_intersection
+        xp = cp
 
-    for i, whisker_angle in enumerate(whisker_angles):
-        abs_angle = unit_angle + whisker_angle
-        start_point = unit_pos
-        end_point = unit_pos + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle))
+        # --- Prepare whisker data ---
+        abs_angles = unit_angle + whisker_angles
 
-        closest_dist = whisker_length
-        detected_type = None
-        closest_intersect_point = end_point
+        # --- Vectorized whisker-object intersection ---
+        if local_objects_data:
+            start_points_gpu = xp.asarray(unit_pos.xy).reshape(1, 2)
+            whisker_end_vectors = xp.stack([
+                xp.cos(xp.asarray(abs_angles)) * whisker_length,
+                xp.sin(xp.asarray(abs_angles)) * whisker_length
+            ], axis=1)
+            end_points_gpu = start_points_gpu + whisker_end_vectors
 
+            centers_gpu = xp.asarray([d['position'] for d in local_objects_data])
+            radii_gpu = xp.asarray([d['size'] for d in local_objects_data])
+
+            obj_distances, obj_indices = vectorized_line_circle_intersection(
+                start_points_gpu, end_points_gpu, centers_gpu, radii_gpu, xp)
+        else:
+            obj_distances = xp.full(num_whiskers, xp.inf)
+            obj_indices = xp.full(num_whiskers, -1, dtype=xp.int32)
+
+        # --- Wall detection (iterative) ---
+        wall_distances = np.full(num_whiskers, np.inf)
         if "wall" in perceivable_types:
-            dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
-            steps = max(abs(dx), abs(dy))
-            if steps > 0:
-                x_inc, y_inc = dx / steps, dy / steps
-                x, y = start_point.x, start_point.y
-                for _ in range(int(steps)):
-                    grid_x = int(x // _tile_map_global.tile_size)
-                    grid_y = int(y // _tile_map_global.tile_size)
-                    if _tile_map_global.get_tile(grid_x, grid_y) == Tile.WALL:
-                        closest_dist = unit_pos.distance_to(pygame.Vector2(x, y))
-                        detected_type = "wall"
-                        closest_intersect_point = pygame.Vector2(x, y)
-                        break
-                    x += x_inc
-                    y += y_inc
+            # This loop is structured to be identical to the fallback logic
+            # to prevent subtle bugs.
+            for i, whisker_angle in enumerate(whisker_angles):
+                abs_angle = unit_angle + whisker_angle
+                start_point = unit_pos
+                end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle))
+                dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
+                steps = int(max(abs(dx), abs(dy)))
+                if steps > 0:
+                    x_inc, y_inc = dx / steps, dy / steps
+                    for j in range(steps):
+                        x = start_point.x + j * x_inc
+                        y = start_point.y + j * y_inc
+                        if _tile_map_global.get_tile_at_pixel(x, y) == Tile.WALL:
+                            wall_distances[i] = unit_pos.distance_to(pygame.Vector2(x, y))
+                            break
 
-        for obj_data in all_objects_data:
-            dist = line_circle_intersection(start_point, end_point, pygame.Vector2(obj_data['position']), obj_data['size'])
-            if dist is not None and dist < closest_dist:
-                closest_dist = dist
-                detected_type = obj_data['type']
-                closest_intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle))
+        # --- Combine results ---
+        wall_distances_gpu = xp.asarray(wall_distances)
+        obj_hit_is_closer = obj_distances < wall_distances_gpu
 
-        # Store debug info regardless of hit, so we can draw the whisker's full length
-        whisker_debug_info.append({
-            'start': (start_point.x, start_point.y),
-            'end': (closest_intersect_point.x, closest_intersect_point.y),
-            'full_end': (end_point.x, end_point.y),
-            'type': detected_type
-        })
+        final_distances = xp.asnumpy(xp.where(obj_hit_is_closer, obj_distances, wall_distances_gpu))
+        final_indices = xp.asnumpy(xp.where(obj_hit_is_closer, obj_indices, -2)) # -2 for wall
 
-        if detected_type and detected_type in perceivable_types:
-            type_index = perceivable_types.index(detected_type)
-            clamped_dist = max(0, min(closest_dist, whisker_length))
-            whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+        # --- Final processing on CPU to generate inputs and debug info ---
+        object_types = [d['type'] for d in local_objects_data]
+        for i in range(num_whiskers):
+            dist = final_distances[i]
+            idx = final_indices[i]
+            detected_type = None
 
+            abs_angle_rad = unit_angle + whisker_angles[i]
+            start_point = unit_pos
+            full_end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle_rad))
+            intersect_point = full_end_point
+
+            if dist != np.inf:
+                detected_type = "wall" if idx == -2 else object_types[idx]
+                intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle_rad))
+                if detected_type and detected_type in perceivable_types:
+                    type_index = perceivable_types.index(detected_type)
+                    clamped_dist = max(0, min(dist, whisker_length))
+                    whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+
+            whisker_debug_info.append({
+                'start': (start_point.x, start_point.y),
+                'end': (intersect_point.x, intersect_point.y),
+                'full_end': (full_end_point.x, full_end_point.y),
+                'type': detected_type
+            })
+
+    except Exception:
+        # --- Fallback to original iterative method ---
+        from math_utils import iterative_line_circle_intersection
+        for i, whisker_angle in enumerate(whisker_angles):
+            abs_angle = unit_angle + whisker_angle
+            start_point = unit_pos
+            end_point = unit_pos + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle))
+
+            closest_dist = whisker_length
+            detected_type = None
+            intersect_point = end_point
+
+            if "wall" in perceivable_types:
+                dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
+                steps = int(max(abs(dx), abs(dy)))
+                if steps > 0:
+                    x_inc, y_inc = dx / steps, dy / steps
+                    for j in range(steps):
+                        x, y = start_point.x + j * x_inc, start_point.y + j * y_inc
+                        if _tile_map_global.get_tile_at_pixel(x,y) == Tile.WALL:
+                            closest_dist = unit_pos.distance_to(pygame.Vector2(x,y))
+                            detected_type = "wall"
+                            break
+
+            for obj_data in local_objects_data:
+                dist = iterative_line_circle_intersection(start_point, end_point, pygame.Vector2(obj_data['position']), obj_data['size'])
+                if dist is not None and dist < closest_dist:
+                    closest_dist = dist
+                    detected_type = obj_data['type']
+
+            if closest_dist < whisker_length:
+                 intersect_point = start_point + pygame.Vector2(closest_dist, 0).rotate(np.rad2deg(abs_angle))
+
+            if detected_type and detected_type in perceivable_types:
+                type_index = perceivable_types.index(detected_type)
+                clamped_dist = max(0, min(closest_dist, whisker_length))
+                whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+
+            whisker_debug_info.append({
+                'start': (start_point.x, start_point.y),
+                'end': (intersect_point.x, intersect_point.y),
+                'full_end': (end_point.x, end_point.y),
+                'type': detected_type
+            })
+
+    # --- Target and other inputs (common to both paths) ---
     target_pos = pygame.Vector2(target_pos_data)
     relative_vec = target_pos - unit_pos
     relative_vec = relative_vec.rotate(-np.rad2deg(unit_angle))
@@ -98,14 +179,13 @@ def get_unit_inputs(unit_data, world_objects_data, population_data, target_pos_d
     return final_inputs, whisker_debug_info
 
 
-def run_single_unit_step(unit_data, world_objects_data, population_data, target_position_data):
+def run_single_unit_step(unit_data, local_objects_data, target_position_data):
     """
-    The main worker function, refactored to accept static world data.
+    The main worker function, refactored to accept local world data from the Quadtree.
     """
     inputs, whisker_debug_info = get_unit_inputs(
         unit_data,
-        world_objects_data,
-        population_data,
+        local_objects_data,
         target_position_data
     )
 
@@ -119,6 +199,15 @@ def run_single_unit_step(unit_data, world_objects_data, population_data, target_
     }
 
 
+def run_single_unit_step_wrapper(task_data):
+    """Unpacks a dictionary and calls the main worker function."""
+    return run_single_unit_step(
+        task_data['unit_data'],
+        task_data['local_objects_data'],
+        task_data['target_position_data']
+    )
+
+
 class TrainingMode:
     NAVIGATE = 1
     COMBAT = 2
@@ -129,6 +218,7 @@ class TrainingSimulation:
     """
     def __init__(self, population_size, world_size, tile_map, num_whiskers=7, perceivable_types=None, whisker_length=150):
         self.population_size = population_size
+        self.num_to_draw = population_size # Default to drawing all units
         self.world_width, self.world_height = world_size
         self.tile_map = tile_map
         self.generation = 0
@@ -161,6 +251,10 @@ class TrainingSimulation:
         self.population = self._create_initial_population()
         self.population_map = {unit.id: unit for unit in self.population}
 
+        # Create the Quadtree for spatial partitioning
+        qt_boundary = Rectangle(self.world_width / 2, self.world_height / 2, self.world_width, self.world_height)
+        self.quadtree = QuadTree(qt_boundary, capacity=4)
+
     def _create_initial_population(self):
         population = []
         for i in range(self.population_size):
@@ -177,32 +271,45 @@ class TrainingSimulation:
 
     def run_generation_step(self):
         """
-        Runs a single step of the simulation for the entire population using a multiprocessing pool.
+        Runs a single step of the simulation, using the Quadtree for collision optimization.
         """
-        world_objects_data = [obj.to_dict() for obj in self.world_objects]
+        # 1. Populate the Quadtree
+        self.quadtree.clear()
+        all_objects = self.world_objects + self.population
+        for obj in all_objects:
+            self.quadtree.insert(obj)
+
+        # 2. Create tasks for each unit with localized data from the Quadtree
         target_pos_data = (self.target.position.x, self.target.position.y)
-        population_data = [u.to_dict() for u in self.population]
+        tasks = []
+        for unit in self.population:
+            # Query for objects in a wide area around the unit
+            query_radius = unit.whisker_length + unit.size
+            query_area = Rectangle(unit.position.x, unit.position.y, query_radius * 2, query_radius * 2)
+            local_objects = self.quadtree.query(query_area)
 
-        # Create a partial function with the data that is the same for all units.
-        # This is far more efficient as this large data blob is only pickled once.
-        worker_func = partial(run_single_unit_step,
-                              world_objects_data=world_objects_data,
-                              population_data=population_data,
-                              target_position_data=target_pos_data)
+            # Serialize the local objects, excluding the unit itself
+            local_objects_data = [obj.to_dict() for obj in local_objects if obj.id != unit.id]
 
-        tasks = [u.to_dict() for u in self.population]
+            tasks.append({
+                'unit_data': unit.to_dict(),
+                'local_objects_data': local_objects_data,
+                'target_position_data': target_pos_data
+            })
 
+        # 3. Run the simulation step in parallel
         if self.pool:
-            results = self.pool.map(worker_func, tasks)
+            results = self.pool.map(run_single_unit_step_wrapper, tasks)
         else:
+            # Single-threaded fallback
             init_worker(self.tile_map)
-            results = [worker_func(task) for task in tasks]
+            results = [run_single_unit_step_wrapper(task) for task in tasks]
 
+        # 4. Apply results to the units
         for result in results:
             unit = self.population_map[result['id']]
             unit.update(result['actions'], self.projectiles)
             # Restore whisker visualization data from the worker
-            # Convert tuples back to Vector2 for pygame drawing
             unit.whisker_debug_info = [
                 {
                     'start': pygame.Vector2(info['start']),
@@ -214,23 +321,37 @@ class TrainingSimulation:
             unit.position.x = np.clip(unit.position.x, 0, self.world_width)
             unit.position.y = np.clip(unit.position.y, 0, self.world_height)
 
-        # Update and check projectiles
+        # 5. Update projectiles using the Quadtree
         for proj in self.projectiles[:]: # Iterate over a copy
             proj.update()
             if proj.lifespan <= 0:
                 self.projectiles.remove(proj)
                 continue
 
-            # Check for collision with enemy
-            if proj.position.distance_to(self.enemy.position) < self.enemy.size:
-                damage = 10
-                self.enemy.health -= damage
-                proj.owner.damage_dealt += damage
-                self.projectiles.remove(proj)
-                if self.enemy.health <= 0:
-                    print("Enemy defeated!")
-                    # For now, just reset its health for the next generation
-                    self.enemy.health = 100
+            # Query for nearby objects to check for collisions
+            query_range = proj.get_bounding_box()
+            nearby_objects = self.quadtree.query(query_range)
+
+            for obj in nearby_objects:
+                # Only check for collisions with enemies
+                if isinstance(obj, Enemy):
+                    if proj.position.distance_to(obj.position) < obj.size:
+                        damage = 10
+                        obj.health -= damage
+                        proj.owner.damage_dealt += damage
+                        self.projectiles.remove(proj)
+                        if obj.health <= 0:
+                            print("Enemy defeated!")
+                            # For now, just reset its health
+                            obj.health = 100
+                        break # Projectile is gone, stop checking this projectile
+
+    def get_drawable_units(self):
+        """
+        Returns a slice of the current population to be drawn on screen.
+        This ensures that the units shown are always the ones being actively simulated.
+        """
+        return self.population[:self.num_to_draw]
 
     def evolve_population(self, elitism_frac=0.1, mutation_rate=0.05):
         """
@@ -288,6 +409,20 @@ class TrainingSimulation:
             self.pool.close()
             self.pool.join()
             print("Multiprocessing pool cleaned up.")
+            self.pool = None
+
+    def rebuild_pool(self):
+        """
+        Rebuilds the multiprocessing pool to ensure workers have the latest
+        version of the tile_map after it has been edited.
+        """
+        self.cleanup()
+        try:
+            self.pool = Pool(processes=cpu_count(), initializer=init_worker, initargs=(self.tile_map,))
+            print("Multiprocessing pool rebuilt successfully.")
+        except (OSError, ImportError):
+            print("Warning: Multiprocessing pool failed to initialize. Running in single-threaded mode.")
+            self.pool = None
 
     def rebuild_with_new_architecture(self, new_arch, num_whiskers, perceivable_types, whisker_length):
         """
@@ -304,6 +439,22 @@ class TrainingSimulation:
         self.enemy.health = 100
         for unit in self.population:
             unit.damage_dealt = 0
+        self.generation = 0
+
+    def set_population_size(self, new_size):
+        """
+        Updates the population size and resets the simulation.
+        """
+        print(f"Setting new population size to: {new_size}")
+        self.population_size = new_size
+        # The number of drawn units should not exceed the new population size
+        if self.num_to_draw > self.population_size:
+            self.num_to_draw = self.population_size
+
+        self.population = self._create_initial_population()
+        self.population_map = {unit.id: unit for unit in self.population}
+        self.projectiles = []
+        self.enemy.health = 100
         self.generation = 0
 
     def save_fittest_brain(self, filepath_prefix="saved_brains/brain"):

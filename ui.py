@@ -147,3 +147,99 @@ class DesignMenu:
             types.append("unit")
         # "target" is not a player-selectable option for now
         return types
+
+
+class SimulationUI:
+    """
+    Manages the UI elements for the main simulation view, including all sliders.
+    """
+    def __init__(self, world_width, world_height, ui_manager, initial_params):
+        self.manager = ui_manager
+
+        # --- Top-right buttons ---
+        self.to_design_menu_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((world_width - 220, 20), (200, 40)),
+            text='AI Design Menu', manager=self.manager)
+        self.save_brain_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((world_width - 220, 70), (200, 40)),
+            text='Save Fittest Brain', manager=self.manager)
+        self.to_map_editor_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((world_width - 220, 120), (200, 40)),
+            text='Map Editor', manager=self.manager)
+        self.back_to_sim_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((world_width - 220, 20), (200, 40)),
+            text='Back to Simulation', manager=self.manager, visible=False)
+
+        # --- Bottom-left buttons ---
+        self.train_nav_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((20, world_height - 60), (150, 40)),
+            text='Train Navigation', manager=self.manager)
+        self.train_combat_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((180, world_height - 60), (150, 40)),
+            text='Train Combat', manager=self.manager)
+
+        # --- Bottom-right sliders ---
+        y_pos = world_height - 165 # Starting y-position for the top slider
+
+        # Population Size Slider
+        self.pop_size_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((world_width - 230, y_pos), (120, 30)),
+            text='Population:', manager=self.manager)
+        self.pop_size_value_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((world_width - 110, y_pos), (50, 30)),
+            text=str(initial_params['population_size']), manager=self.manager)
+        self.pop_size_slider = pygame_gui.elements.UIHorizontalSlider(
+            relative_rect=pygame.Rect((world_width - 230, y_pos + 25), (200, 20)),
+            start_value=initial_params['population_size'], value_range=(10, 500), manager=self.manager)
+
+        y_pos += 55 # Increment for next slider
+
+        # Drawn Units Slider
+        self.drawn_units_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((world_width - 230, y_pos), (120, 30)),
+            text='Drawn Units:', manager=self.manager)
+        self.drawn_units_value_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((world_width - 110, y_pos), (50, 30)),
+            text=str(initial_params['drawn_units']), manager=self.manager)
+        self.drawn_units_slider = pygame_gui.elements.UIHorizontalSlider(
+            relative_rect=pygame.Rect((world_width - 230, y_pos + 25), (200, 20)),
+            start_value=initial_params['drawn_units'],
+            value_range=(1, initial_params['population_size']), manager=self.manager)
+
+        y_pos += 55 # Increment for next slider
+
+        # Simulation Length Slider
+        self.sim_length_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((world_width - 230, y_pos), (80, 30)),
+            text='Steps:', manager=self.manager)
+        self.sim_length_value_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((world_width - 160, y_pos), (50, 30)),
+            text=str(initial_params['steps_per_generation']), manager=self.manager)
+        self.sim_length_slider = pygame_gui.elements.UIHorizontalSlider(
+            relative_rect=pygame.Rect((world_width - 230, y_pos + 25), (200, 20)),
+            start_value=initial_params['steps_per_generation'], value_range=(100, 2000), manager=self.manager)
+
+        self.elements = [
+            self.to_design_menu_button, self.save_brain_button, self.to_map_editor_button,
+            self.train_nav_button, self.train_combat_button,
+            self.pop_size_label, self.pop_size_value_label, self.pop_size_slider,
+            self.drawn_units_label, self.drawn_units_value_label, self.drawn_units_slider,
+            self.sim_length_label, self.sim_length_value_label, self.sim_length_slider
+        ]
+
+    def show(self):
+        for element in self.elements:
+            element.show()
+
+    def hide(self):
+        for element in self.elements:
+            element.hide()
+
+    def update_drawn_units_range(self, max_value):
+        """Dynamically updates the range of the 'Drawn Units' slider."""
+        current_val = self.drawn_units_slider.get_current_value()
+        self.drawn_units_slider.value_range = (1, max_value)
+        # Clamp the current value to the new range
+        if current_val > max_value:
+            self.drawn_units_slider.set_current_value(max_value)
+            self.drawn_units_value_label.set_text(str(max_value))
