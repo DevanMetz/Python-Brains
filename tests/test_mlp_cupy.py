@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 import numpy as np
 import sys
 import os
@@ -105,6 +106,57 @@ class TestMLPCupyCPUFallback(unittest.TestCase):
         finally:
             # IMPORTANT: Restore the original value to not affect other tests
             mlp_cupy.CUPY_AVAILABLE = original_cupy_available
+
+class TestMLPCupyGPUMocked(unittest.TestCase):
+    """
+    Tests the GPU functionality by mocking CuPy calls.
+    """
+
+    @patch('mlp_cupy.CUPY_AVAILABLE', True)
+    @patch('cupy.asarray')
+    def test_forward_pass_gpu_failure_fallback(self, mock_asarray):
+        """Test that a CuPy error during forward pass triggers the CPU fallback."""
+        # Configure the mock to raise an exception when called
+        mock_asarray.side_effect = RuntimeError("Simulated CuPy Error")
+
+        arch = [5, 10, 3]
+        mlp = MLPCupy(arch)
+        inputs = np.random.randn(1, 5)
+
+        # This forward pass should fail on the GPU and fall back to the CPU
+        output = mlp.forward(inputs)
+
+        # Verify that the output is what we'd expect from the CPU implementation
+        self.assertEqual(output.shape, (1, 3))
+        self.assertTrue(np.all(output >= -1) and np.all(output <= 1))
+        self.assertIsInstance(output, np.ndarray)
+
+    @patch('mlp_cupy.CUPY_AVAILABLE', True)
+    @patch('cupy.asnumpy')
+    @patch('cupy.tanh')
+    @patch('cupy.asarray')
+    def test_forward_pass_gpu_success_mocked(self, mock_asarray, mock_tanh, mock_asnumpy):
+        """Test the GPU forward pass with mocked CuPy functions."""
+        # Make asarray and asnumpy return the data as is (acting as placeholders)
+        mock_asarray.side_effect = lambda x: np.array(x) if not isinstance(x, np.ndarray) else x
+        mock_asnumpy.side_effect = lambda x: x
+        # Mock tanh to behave like numpy's tanh for consistent results
+        mock_tanh.side_effect = np.tanh
+
+        arch = [2, 3, 1]
+        mlp = MLPCupy(arch)
+        # Use a list input to test the conversion to a NumPy array
+        inputs = [0.5, 0.5]
+        output = mlp.forward(inputs)
+
+        self.assertEqual(output.shape, (1, 1))
+        self.assertIsInstance(output, np.ndarray)
+
+        # Check that the GPU path was taken by checking mock calls
+        self.assertTrue(mock_asarray.called)
+        self.assertTrue(mock_tanh.called)
+        self.assertTrue(mock_asnumpy.called)
+
 
 if __name__ == '__main__':
     unittest.main()

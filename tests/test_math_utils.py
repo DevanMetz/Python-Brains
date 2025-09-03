@@ -6,7 +6,7 @@ import os
 # Add the root directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from math_utils import vectorized_line_circle_intersection
+from math_utils import vectorized_line_circle_intersection, iterative_line_circle_intersection
 from mlp_cupy import CUPY_AVAILABLE # Reuse the check for CuPy availability
 
 if CUPY_AVAILABLE:
@@ -92,6 +92,52 @@ class TestVectorizedIntersection(unittest.TestCase):
     def test_cupy_backend(self):
         """Run all tests using the CuPy backend."""
         self._run_test_with_backend(cp)
+
+
+class TestIterativeIntersection(unittest.TestCase):
+    """
+    Tests for the non-vectorized, iterative line-circle intersection function.
+    """
+
+    def test_simple_intersection(self):
+        """Test a clear intersection case."""
+        dist = iterative_line_circle_intersection((0, 0), (10, 0), (5, 0), 1)
+        self.assertAlmostEqual(dist, 4.0)
+
+    def test_no_intersection(self):
+        """Test a case where the line and circle do not intersect."""
+        dist = iterative_line_circle_intersection((0, 0), (10, 0), (5, 5), 1)
+        self.assertIsNone(dist)
+
+    def test_tangent_intersection(self):
+        """Test a case where the line is tangent to the circle."""
+        dist = iterative_line_circle_intersection((0, 0), (10, 0), (5, 1), 1)
+        # In the iterative case, a tangent may not be considered a true intersection
+        # depending on floating point precision. The key is that it shouldn't error.
+        # The current implementation finds the single intersection point t=0.5,
+        # which corresponds to a distance of 5.0. But it only returns a distance if t1 is valid.
+        # Let's check the logic. t1 and t2 will be equal.
+        # (-b - 0) / (2a). a=100, b = -100, c=24. b^2-4ac = 10000 - 9600 = 400. sqrt is 20.
+        # t1 = (100-20)/200 = 0.4. t2 = (100+20)/200=0.6.
+        # The iterative function only checks t1.
+        # Let's re-calculate for the tangent case.
+        # p1=(0,0), p2=(10,0), d=(10,0). center=(5,1), r=1. f=(-5,-1).
+        # a = 100. b = 2*f.dot(d) = 2*(-50) = -100. c = f.dot(f)-r^2 = 26-1=25.
+        # disc = (-100)^2 - 4*100*25 = 10000 - 10000 = 0.
+        # t1 = 100/200 = 0.5.
+        # dist = p1.distance_to(p1 + 0.5 * d) = distance to (5,0) = 5.0
+        dist = iterative_line_circle_intersection((0, 0), (10, 0), (5, 1), 1)
+        self.assertAlmostEqual(dist, 5.0)
+
+    def test_intersection_off_segment(self):
+        """Test when the intersection point is not on the line segment."""
+        dist = iterative_line_circle_intersection((0, 0), (10, 0), (15, 0), 1)
+        self.assertIsNone(dist)
+
+    def test_zero_length_line(self):
+        """Test with a zero-length line segment."""
+        dist = iterative_line_circle_intersection((5, 5), (5, 5), (5, 5), 1)
+        self.assertIsNone(dist)
 
 
 if __name__ == '__main__':
