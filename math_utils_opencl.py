@@ -89,67 +89,31 @@ __kernel void unified_perception_kernel(
         }
     }
 
-    // --- Part 2: Wall Intersection (DDA Algorithm) ---
+    // --- Part 2: Wall Intersection (Ray-Marching) ---
+    // This is a simple and robust algorithm that is less efficient than DDA
+    // but is more stable and less prone to floating point issues.
     float wall_dist = INFINITY;
     if (detect_walls != 0 && line_length_sq > 0.0f) {
-        float2 dir = normalize(d);
-        // This check is important to avoid division by zero for vertical/horizontal lines
-        if (dir.x == 0.0f) dir.x = 1e-8f;
-        if (dir.y == 0.0f) dir.y = 1e-8f;
-
-        float2 delta_dist = fabs((float2)(1.0f, 1.0f) / dir);
-        int2 map_coords = (int2)(floor(p1.x / tile_size), floor(p1.y / tile_size));
-        float2 side_dist;
-        int2 step_dir;
-
-        if (dir.x < 0) {
-            step_dir.x = -1;
-            side_dist.x = (p1.x - (float)map_coords.x * tile_size) * delta_dist.x;
-        } else {
-            step_dir.x = 1;
-            side_dist.x = (((float)map_coords.x + 1.0f) * tile_size - p1.x) * delta_dist.x;
-        }
-
-        if (dir.y < 0) {
-            step_dir.y = -1;
-            side_dist.y = (p1.y - (float)map_coords.y * tile_size) * delta_dist.y;
-        } else {
-            step_dir.y = 1;
-            side_dist.y = (((float)map_coords.y + 1.0f) * tile_size - p1.y) * delta_dist.y;
-        }
-
         float line_length = sqrt(line_length_sq);
-        float traveled_dist = 0.0f;
+        int steps = (int)line_length;
+        if (steps > 0) {
+            float2 dir = d / line_length; // Normalized direction vector
+            for (int j = 1; j <= steps; ++j) {
+                float2 current_pos = p1 + dir * (float)j;
+                int grid_x = (int)(current_pos.x / tile_size);
+                int grid_y = (int)(current_pos.y / tile_size);
 
-        // A proper implementation would pass map_height_tiles.
-        // We use a generous loop limit to prevent infinite loops on malformed input.
-        int max_iter = 2 * (int)(line_length / tile_size + 2);
-
-        for(int k=0; k < max_iter; ++k) {
-            if (side_dist.x < side_dist.y) {
-                traveled_dist = side_dist.x;
-                side_dist.x += delta_dist.x;
-                map_coords.x += step_dir.x;
-            } else {
-                traveled_dist = side_dist.y;
-                side_dist.y += delta_dist.y;
-                map_coords.y += step_dir.y;
-            }
-
-            if (traveled_dist > line_length) {
-                break; // Gone past the end of the whisker
-            }
-
-            if (map_coords.x >= 0 && map_coords.x < map_width_tiles && map_coords.y >=0) {
-                int tile_index = map_coords.y * map_width_tiles + map_coords.x;
-                // Note: Assumes tile_map_data is large enough. A robust implementation
-                // would also check against map_height_tiles.
-                if (tile_map_data[tile_index] == 1) { // 1 == Tile.WALL
-                    wall_dist = traveled_dist;
-                    break;
+                // Boundary checks for the map
+                if (grid_x >= 0 && grid_x < map_width_tiles && grid_y >= 0) {
+                    // A full bounds check would need map_height_tiles, but this is a safe guard.
+                    int tile_index = grid_y * map_width_tiles + grid_x;
+                    if (tile_map_data[tile_index] == 1) { // 1 == Tile.WALL
+                        wall_dist = (float)j; // The distance is the number of steps taken.
+                        break;
+                    }
+                } else {
+                    break; // Stop if we go out of map bounds
                 }
-            } else {
-                break; // Ray is out of bounds
             }
         }
     }
