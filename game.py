@@ -6,16 +6,23 @@ class Unit:
     """
     Represents a single unit in the game, controlled by an MLP brain.
     """
-    def __init__(self, x, y, brain=None, num_whiskers=7):
+    def __init__(self, x, y, brain=None, num_whiskers=7, perceivable_types=None):
         self.position = pygame.Vector2(x, y)
         self.angle = np.random.uniform(0, 2 * np.pi) # Facing direction in radians
         self.velocity = pygame.Vector2(0, 0)
         self.size = 10 # Radius for drawing and collision
         self.color = (0, 150, 255) # Blue
         self.speed = 2.0
+        self.type = "unit"
+        self.damage_dealt = 0
 
         self.brain = brain
         self.num_whiskers = num_whiskers
+        self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "target", "unit"]
+
+        self.attack_cooldown = 0
+        self.max_cooldown = 30 # Can fire every 30 frames
+
         if self.num_whiskers > 1:
             self.whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, self.num_whiskers)
         else:
@@ -24,70 +31,87 @@ class Unit:
 
     def get_inputs(self, world_objects):
         """
-        Calculates the inputs for the MLP brain using the whisker system.
-        Each whisker returns a value indicating the proximity of a detected object.
+        Calculates inputs for the MLP brain using typed whisker perception.
+        For each whisker, it generates an input for each perceivable object type.
         """
-        inputs = []
+        num_perceivables = len(self.perceivable_types)
+        # Create a matrix for whisker inputs: rows=whiskers, cols=perceivable_types
+        whisker_inputs = np.zeros((self.num_whiskers, num_perceivables))
 
-        for whisker_angle in self.whisker_angles:
+        for i, whisker_angle in enumerate(self.whisker_angles):
             abs_angle = self.angle + whisker_angle
             start_point = self.position
             end_point = self.position + pygame.Vector2(self.whisker_length, 0).rotate(np.rad2deg(abs_angle))
 
             closest_dist = self.whisker_length
+            detected_type = None
 
+            # Find the closest object intersected by this whisker
             for obj in world_objects:
                 if obj is self:
                     continue
 
+                dist = self.whisker_length + 1
                 if isinstance(obj, Wall):
-                    # Check for intersection with each of the wall's four sides
                     points = [
                         (obj.rect.left, obj.rect.top), (obj.rect.right, obj.rect.top),
                         (obj.rect.right, obj.rect.bottom), (obj.rect.left, obj.rect.bottom)
                     ]
-                    for i in range(4):
-                        p1 = points[i]
-                        p2 = points[(i + 1) % 4]
+                    for j in range(4):
+                        p1, p2 = points[j], points[(j + 1) % 4]
                         intersect_point = line_intersection(start_point, end_point, p1, p2)
                         if intersect_point:
                             dist = self.position.distance_to(intersect_point)
-                            if dist < closest_dist:
-                                closest_dist = dist
-                elif isinstance(obj, (Unit, Target)):
-                    # Check for line-circle intersection
+                elif hasattr(obj, 'position'): # Circle-based objects
                     intersect_dist = line_circle_intersection(start_point, end_point, obj.position, obj.size)
                     if intersect_dist is not None:
-                        if intersect_dist < closest_dist:
-                            closest_dist = intersect_dist
+                        dist = intersect_dist
 
-            # The input is the inverse of the distance (closer is a stronger signal)
-            inputs.append(1.0 - (closest_dist / self.whisker_length))
+                if dist < closest_dist:
+                    closest_dist = dist
+                    detected_type = obj.type
 
-        # Also add unit's own velocity and angle as inputs
-        inputs.append(self.velocity.length() / self.speed)
-        inputs.append(self.angle / (2 * np.pi))
+            # If an object was detected, update the corresponding input neuron
+            if detected_type and detected_type in self.perceivable_types:
+                type_index = self.perceivable_types.index(detected_type)
+                whisker_inputs[i, type_index] = 1.0 - (closest_dist / self.whisker_length)
 
-        return np.array(inputs)
+        # Flatten the whisker inputs and add other state info
+        flat_whisker_inputs = whisker_inputs.flatten()
+        other_inputs = np.array([self.velocity.length() / self.speed, self.angle / (2 * np.pi)])
 
-    def update(self, actions):
+        return np.concatenate((flat_whisker_inputs, other_inputs))
+
+    def attack(self):
+        """Creates and returns a new projectile if cooldown is over."""
+        if self.attack_cooldown <= 0:
+            self.attack_cooldown = self.max_cooldown
+            return Projectile(self.position.x, self.position.y, self.angle)
+        return None
+
+    def update(self, actions, world_projectiles):
         """
         Updates the unit's state based on the MLP's output actions.
         """
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= 1
+
         # Actions are expected to be in the range [-1, 1] from the tanh activation
-        turn_action = actions[0][0] # Turn left/right
-        move_action = actions[0][1] # Move forward/backward
+        turn_action = actions[0][0]
+        move_action = actions[0][1]
 
-        # Update angle
-        self.angle += turn_action * 0.1 # Adjust sensitivity as needed
-
-        # Update velocity based on move action
-        # We use max(0, ...) to prevent moving backward
+        self.angle += turn_action * 0.1
         forward_speed = max(0, move_action) * self.speed
         self.velocity = pygame.Vector2(forward_speed, 0).rotate(np.rad2deg(self.angle))
-
-        # Update position
         self.position += self.velocity
+
+        # Handle attack action if it exists
+        if len(actions[0]) > 2:
+            attack_action = actions[0][2]
+            if attack_action > 0.5: # Threshold to fire
+                projectile = self.attack()
+                if projectile:
+                    world_projectiles.append(projectile)
 
     def draw(self, screen):
         # Draw body
@@ -102,6 +126,7 @@ class Wall:
     def __init__(self, x, y, width, height):
         self.rect = pygame.Rect(x, y, width, height)
         self.color = (100, 100, 100)
+        self.type = "wall"
 
     def draw(self, screen):
         pygame.draw.rect(screen, self.color, self.rect)
@@ -112,6 +137,43 @@ class Target:
         self.position = pygame.Vector2(x, y)
         self.size = 15
         self.color = (0, 255, 0) # Green
+        self.type = "target"
+
+    def draw(self, screen):
+        pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
+
+class Enemy:
+    """Represents a stationary enemy with health."""
+    def __init__(self, x, y):
+        self.position = pygame.Vector2(x, y)
+        self.size = 15
+        self.color = (255, 0, 0) # Red
+        self.health = 100
+        self.type = "enemy"
+
+    def draw(self, screen):
+        pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)
+        # Draw health bar
+        if self.health < 100:
+            bar_width = self.size * 2
+            bar_height = 5
+            health_frac = self.health / 100.0
+            pygame.draw.rect(screen, (255,0,0), (self.position.x - self.size, self.position.y - self.size - 10, bar_width, bar_height))
+            pygame.draw.rect(screen, (0,255,0), (self.position.x - self.size, self.position.y - self.size - 10, bar_width * health_frac, bar_height))
+
+class Projectile:
+    """Represents a projectile fired by a unit."""
+    def __init__(self, x, y, angle, owner):
+        self.position = pygame.Vector2(x, y)
+        self.velocity = pygame.Vector2(5, 0).rotate(np.rad2deg(angle))
+        self.size = 3
+        self.color = (255, 255, 0) # Yellow
+        self.lifespan = 150 # Frames
+        self.owner = owner
+
+    def update(self):
+        self.position += self.velocity
+        self.lifespan -= 1
 
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.size)

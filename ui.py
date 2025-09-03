@@ -47,21 +47,38 @@ class DesignMenu:
             container=self.panel
         )
 
+        # --- UI Elements for Outputs ---
+        self.attack_checkbox = pygame_gui.elements.UICheckBox(
+            relative_rect=pygame.Rect((10, 140), (280, 25)),
+            text="Enable Attack Action",
+            check_start=False,
+            manager=ui_manager,
+            container=self.panel
+        )
+
+        # --- UI Elements for Perception Types ---
+        self.sense_wall_checkbox = pygame_gui.elements.UICheckBox(
+            relative_rect=pygame.Rect((10, 170), (140, 25)), text="Sense Walls", check_start=True, manager=ui_manager, container=self.panel)
+        self.sense_enemy_checkbox = pygame_gui.elements.UICheckBox(
+            relative_rect=pygame.Rect((150, 170), (140, 25)), text="Sense Enemies", check_start=True, manager=ui_manager, container=self.panel)
+        self.sense_unit_checkbox = pygame_gui.elements.UICheckBox(
+            relative_rect=pygame.Rect((10, 200), (140, 25)), text="Sense Friendlies", check_start=True, manager=ui_manager, container=self.panel)
+
         # --- Action Buttons ---
         self.update_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((10, 150), (280, 40)),
+            relative_rect=pygame.Rect((10, 230), (280, 40)),
             text='Create New Population',
             manager=ui_manager,
             container=self.panel
         )
         self.load_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((10, 200), (280, 40)),
+            relative_rect=pygame.Rect((10, 280), (280, 40)),
             text='Load Last Saved Brain',
             manager=ui_manager,
             container=self.panel
         )
         self.close_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((10, 250), (280, 40)),
+            relative_rect=pygame.Rect((10, 330), (280, 40)),
             text='Close',
             manager=ui_manager,
             container=self.panel
@@ -93,3 +110,15 @@ class DesignMenu:
         except ValueError:
             print("Error: Invalid input for hidden layers. Please use comma-separated integers.")
             return None
+
+    def get_perceivable_types(self):
+        """Returns a list of selected type strings."""
+        types = []
+        if self.sense_wall_checkbox.is_selected:
+            types.append("wall")
+        if self.sense_enemy_checkbox.is_selected:
+            types.append("enemy")
+        if self.sense_unit_checkbox.is_selected:
+            types.append("unit")
+        # "target" is not a player-selectable option for now
+        return types
