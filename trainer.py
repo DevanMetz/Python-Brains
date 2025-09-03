@@ -231,7 +231,7 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     return final_inputs, whisker_debug_info
 
 
-def run_single_unit_step(unit_data, local_objects_data, target_position_data):
+def run_single_unit_step(unit_data, local_objects_data, target_position_data, brain_id):
     """The main worker function for processing one unit for one simulation step.
 
     This function is executed by a worker in the multiprocessing pool. It takes
@@ -243,6 +243,7 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data):
         unit_data (dict): Serialized state of the unit.
         local_objects_data (list[dict]): Serialized list of nearby objects.
         target_position_data (tuple[float, float]): Position of the target.
+        brain_id (int): The stable ID of the brain from the main process.
 
     Returns:
         dict: A dictionary containing the results of the step, including the
@@ -263,8 +264,8 @@ def run_single_unit_step(unit_data, local_objects_data, target_position_data):
         try:
             from mlp_opencl import context # Get the worker's context
 
-            # Use the memory address of the weights array as a unique ID.
-            brain_id = brain.weights[0].ctypes.data
+            # Use the stable brain_id passed from the main process as the unique ID.
+            # DO NOT use an ID from the brain object itself, as it's a new copy every time.
 
             # Check if this brain's OpenCL buffers are already cached.
             if brain_id not in _gpu_brain_cache:
@@ -337,8 +338,8 @@ def run_single_unit_step_wrapper(task_data):
 
     Args:
         task_data (dict): A dictionary containing the arguments for the main
-            worker function: `unit_data`, `local_objects_data`, and
-            `target_position_data`.
+            worker function: `unit_data`, `local_objects_data`,
+            `target_position_data`, and `brain_id`.
 
     Returns:
         dict: The result from `run_single_unit_step`.
@@ -346,7 +347,8 @@ def run_single_unit_step_wrapper(task_data):
     return run_single_unit_step(
         task_data['unit_data'],
         task_data['local_objects_data'],
-        task_data['target_position_data']
+        task_data['target_position_data'],
+        task_data['brain_id']
     )
 
 
@@ -508,7 +510,8 @@ class TrainingSimulation:
             tasks.append({
                 'unit_data': unit.to_dict(),
                 'local_objects_data': local_objects_data,
-                'target_position_data': target_pos_data
+                'target_position_data': target_pos_data,
+                'brain_id': id(unit.brain)
             })
 
         # 3. Run the simulation step in parallel
@@ -703,6 +706,9 @@ class TrainingSimulation:
         for unit in self.population:
             unit.damage_dealt = 0
         self.generation = 0
+
+        # Clear the GPU cache in the worker processes, as the old brains are now gone.
+        self.clear_worker_caches()
 
     def set_population_size(self, new_size):
         """Updates the population size and resets the simulation.
