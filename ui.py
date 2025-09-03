@@ -9,7 +9,7 @@ class DesignMenu:
         self.panel = pygame_gui.elements.UIPanel(
             relative_rect=rect,
             manager=ui_manager,
-            visible=False # Initially hidden
+            visible=True # Start visible, then hide later
         )
 
         # --- UI Elements for Architecture ---
@@ -57,11 +57,14 @@ class DesignMenu:
 
         # --- UI Elements for Perception Types ---
         self.sense_wall_checkbox = pygame_gui.elements.UICheckBox(
-            relative_rect=pygame.Rect((10, 170), (140, 25)), text="Sense Walls", check_start=True, manager=ui_manager, container=self.panel)
+            relative_rect=pygame.Rect((10, 170), (140, 25)), text="Sense Walls", manager=ui_manager, container=self.panel)
+        self.sense_wall_checkbox.select() # Start as checked
         self.sense_enemy_checkbox = pygame_gui.elements.UICheckBox(
-            relative_rect=pygame.Rect((150, 170), (140, 25)), text="Sense Enemies", check_start=True, manager=ui_manager, container=self.panel)
+            relative_rect=pygame.Rect((150, 170), (140, 25)), text="Sense Enemies", manager=ui_manager, container=self.panel)
+        self.sense_enemy_checkbox.select() # Start as checked
         self.sense_unit_checkbox = pygame_gui.elements.UICheckBox(
-            relative_rect=pygame.Rect((10, 200), (140, 25)), text="Sense Friendlies", check_start=True, manager=ui_manager, container=self.panel)
+            relative_rect=pygame.Rect((10, 200), (140, 25)), text="Sense Friendlies", manager=ui_manager, container=self.panel)
+        self.sense_unit_checkbox.select() # Start as checked
 
         # --- Action Buttons ---
         self.update_button = pygame_gui.elements.UIButton(
@@ -82,6 +85,9 @@ class DesignMenu:
             manager=ui_manager,
             container=self.panel
         )
+
+        # Now hide the panel after all children are created
+        self.panel.hide()
 
     def show(self):
         self.panel.show()
