@@ -12,9 +12,10 @@ class TrainingSimulation:
     """
     Manages the genetic algorithm training process.
     """
-    def __init__(self, population_size=50, world_size=(800, 600), num_whiskers=7, perceivable_types=None):
+    def __init__(self, population_size, world_size, tile_map, num_whiskers=7, perceivable_types=None):
         self.population_size = population_size
         self.world_width, self.world_height = world_size
+        self.tile_map = tile_map
         self.generation = 0
         self.num_whiskers = num_whiskers
         self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "unit"]
@@ -25,16 +26,11 @@ class TrainingSimulation:
         num_inputs = self.num_whiskers * len(self.perceivable_types) + 2 # whiskers * types + velocity + angle
         self.mlp_architecture = [num_inputs, 16, 2]
 
-        # Create world objects
+        # Create world objects (dynamic objects, walls are handled by the map)
         self.target = Target(self.world_width - 50, self.world_height / 2)
-        self.enemy = Enemy(self.world_width - 100, self.world_height / 2 + 100) # Add an enemy
+        self.enemy = Enemy(self.world_width - 100, self.world_height / 2 + 100)
         self.world_objects = [self.target, self.enemy]
         self.projectiles = []
-        # Add some boundary walls
-        self.world_objects.append(Wall(0, 0, self.world_width, 10)) # Top
-        self.world_objects.append(Wall(0, self.world_height - 10, self.world_width, 10)) # Bottom
-        self.world_objects.append(Wall(0, 0, 10, self.world_height)) # Left
-        self.world_objects.append(Wall(self.world_width - 10, 0, 10, self.world_height)) # Right
 
         # Create the initial population
         self.population = self._create_initial_population()
@@ -45,7 +41,9 @@ class TrainingSimulation:
             brain = MLP(self.mlp_architecture)
             unit = Unit(
                 x=50, y=self.world_height / 2, brain=brain,
-                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types
+                num_whiskers=self.num_whiskers,
+                perceivable_types=self.perceivable_types,
+                tile_map=self.tile_map
             )
             population.append(unit)
         return population
@@ -113,7 +111,8 @@ class TrainingSimulation:
             # Create a new unit instance but keep the brain and configuration
             new_unit = Unit(
                 x=50, y=self.world_height / 2, brain=elite_unit.brain,
-                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types
+                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types,
+                tile_map=self.tile_map
             )
             new_population.append(new_unit)
 
@@ -132,7 +131,8 @@ class TrainingSimulation:
             # Add new unit with the child's brain to the population
             new_unit = Unit(
                 x=50, y=self.world_height / 2, brain=child_brain,
-                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types
+                num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types,
+                tile_map=self.tile_map
             )
             new_population.append(new_unit)
 
@@ -150,7 +150,7 @@ class TrainingSimulation:
         self.mlp_architecture = new_arch
         self.num_whiskers = num_whiskers
         self.perceivable_types = perceivable_types
-        self.population = self._create_initial_population()
+        self.population = self._create_initial_population() # This will now use the new tile_map correctly
         self.projectiles = [] # Clear projectiles
         self.enemy.health = 100 # Reset enemy health
         for unit in self.population:

@@ -9,7 +9,6 @@ from ui import DesignMenu
 WORLD_WIDTH, WORLD_HEIGHT = 800, 600
 FPS = 60
 STEPS_PER_GENERATION = 400
-SPEED_LEVELS = [1, 2, 4, 8, 16, 32]
 
 # --- Colors ---
 BLACK = (0, 0, 0)
@@ -34,8 +33,6 @@ def main():
     trainer = TrainingSimulation(population_size=50, world_size=(WORLD_WIDTH, WORLD_HEIGHT))
     step_counter = 0
     best_fitness = 0
-    speed_index = 0
-    simulation_speed = SPEED_LEVELS[speed_index]
 
     # --- Game State ---
     current_state = GameState.SIMULATION
@@ -75,14 +72,6 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_UP:
-                    speed_index = min(speed_index + 1, len(SPEED_LEVELS) - 1)
-                    simulation_speed = SPEED_LEVELS[speed_index]
-                elif event.key == pygame.K_DOWN:
-                    speed_index = max(speed_index - 1, 0)
-                    simulation_speed = SPEED_LEVELS[speed_index]
 
             if event.type == pygame_gui.UI_HORIZONTAL_SLIDER_MOVED:
                 if event.ui_element == design_menu.whisker_slider:
@@ -142,17 +131,13 @@ def main():
             train_nav_button.show()
             train_combat_button.show()
 
-            # --- Run simulation steps based on speed ---
-            for _ in range(simulation_speed):
-                if step_counter < STEPS_PER_GENERATION:
-                    trainer.run_generation_step()
-                    step_counter += 1
-                else:
-                    best_fitness = trainer.evolve_population()
-                    step_counter = 0
-                    print(f"Generation: {trainer.generation}, Best Fitness: {best_fitness:.2f}")
-                    # Break the speed loop to show the new generation stats immediately
-                    break
+            if step_counter < STEPS_PER_GENERATION:
+                trainer.run_generation_step()
+                step_counter += 1
+            else:
+                best_fitness = trainer.evolve_population()
+                step_counter = 0
+                print(f"Generation: {trainer.generation}, Best Fitness: {best_fitness:.2f}")
 
         # --- Drawing ---
         screen.fill(BLACK)
@@ -168,11 +153,9 @@ def main():
             gen_text = font.render(f"Generation: {trainer.generation}", True, WHITE)
             fitness_text = font.render(f"Best Fitness: {best_fitness:.2f}", True, WHITE)
             mode_text = font.render(f"Mode: {'COMBAT' if trainer.training_mode == TrainingMode.COMBAT else 'NAVIGATE'}", True, WHITE)
-            speed_text = font.render(f"Speed: {simulation_speed}x", True, WHITE)
             screen.blit(gen_text, (20, 20))
             screen.blit(fitness_text, (20, 50))
             screen.blit(mode_text, (20, 80))
-            screen.blit(speed_text, (20, 110))
 
         ui_manager.draw_ui(screen)
         pygame.display.flip()

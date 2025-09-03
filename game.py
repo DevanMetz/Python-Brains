@@ -2,12 +2,15 @@ import numpy as np
 import pygame
 from mlp import MLP
 
+from map import Tile
+
 class Unit:
     """
     Represents a single unit in the game, controlled by an MLP brain.
     """
-    def __init__(self, x, y, brain=None, num_whiskers=7, perceivable_types=None):
+    def __init__(self, x, y, tile_map, brain=None, num_whiskers=7, perceivable_types=None):
         self.position = pygame.Vector2(x, y)
+        self.tile_map = tile_map
         self.angle = np.random.uniform(0, 2 * np.pi) # Facing direction in radians
         self.velocity = pygame.Vector2(0, 0)
         self.size = 10 # Radius for drawing and collision
@@ -33,10 +36,9 @@ class Unit:
     def get_inputs(self, world_objects):
         """
         Calculates inputs for the MLP brain using typed whisker perception.
-        For each whisker, it generates an input for each perceivable object type.
-        It also populates self.whisker_debug_info for drawing purposes.
+        Detects walls from the tilemap and other objects from the world_objects list.
         """
-        self.whisker_debug_info = [] # Clear previous frame's data
+        self.whisker_debug_info = []
         num_perceivables = len(self.perceivable_types)
         whisker_inputs = np.zeros((self.num_whiskers, num_perceivables))
 
@@ -47,52 +49,40 @@ class Unit:
 
             closest_dist = self.whisker_length
             detected_type = None
-            closest_intersect_point = end_point # Default to full length
+            closest_intersect_point = end_point
 
-            # Find the closest object intersected by this whisker
+            # --- Detect Walls from TileMap by sampling points ---
+            if "wall" in self.perceivable_types:
+                for step in range(int(self.whisker_length)):
+                    check_point = start_point + pygame.Vector2(step, 0).rotate(np.rad2deg(abs_angle))
+                    if self.tile_map.get_tile_at_pixel(check_point.x, check_point.y) == Tile.WALL:
+                        closest_dist = self.position.distance_to(check_point)
+                        detected_type = "wall"
+                        closest_intersect_point = check_point
+                        break # Found the closest wall on this whisker
+
+            # --- Detect other objects (enemies, targets, etc.) ---
             for obj in world_objects:
                 if obj is self:
                     continue
+                dist = line_circle_intersection(start_point, end_point, obj.position, obj.size)
+                if dist is not None and dist < closest_dist:
+                    closest_dist = dist
+                    detected_type = obj.type
+                    closest_intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle))
 
-                intersect_point = None
-                if isinstance(obj, Wall):
-                    points = [
-                        (obj.rect.left, obj.rect.top), (obj.rect.right, obj.rect.top),
-                        (obj.rect.right, obj.rect.bottom), (obj.rect.left, obj.rect.bottom)
-                    ]
-                    for j in range(4):
-                        p1, p2 = points[j], points[(j + 1) % 4]
-                        intersect = line_intersection(start_point, end_point, p1, p2)
-                        if intersect:
-                            dist = self.position.distance_to(intersect)
-                            if dist < closest_dist:
-                                closest_dist = dist
-                                detected_type = obj.type
-                                closest_intersect_point = intersect
-                elif hasattr(obj, 'position'): # Circle-based objects
-                    dist = line_circle_intersection(start_point, end_point, obj.position, obj.size)
-                    if dist is not None and dist < closest_dist:
-                        closest_dist = dist
-                        detected_type = obj.type
-                        closest_intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle))
 
-            # Store debug info for this whisker
             self.whisker_debug_info.append({
-                'start': start_point,
-                'end': closest_intersect_point,
-                'full_end': end_point,
-                'type': detected_type
+                'start': start_point, 'end': closest_intersect_point,
+                'full_end': end_point, 'type': detected_type
             })
 
-            # If an object was detected, update the corresponding input neuron
             if detected_type and detected_type in self.perceivable_types:
                 type_index = self.perceivable_types.index(detected_type)
                 whisker_inputs[i, type_index] = 1.0 - (closest_dist / self.whisker_length)
 
-        # Flatten the whisker inputs and add other state info
         flat_whisker_inputs = whisker_inputs.flatten()
         other_inputs = np.array([self.velocity.length() / self.speed, self.angle / (2 * np.pi)])
-
         return np.concatenate((flat_whisker_inputs, other_inputs))
 
     def attack(self):
@@ -102,23 +92,48 @@ class Unit:
             return Projectile(self.position.x, self.position.y, self.angle, self)
         return None
 
+    def _check_wall_collision(self, position):
+        """Checks if a position collides with a wall tile."""
+        # Check the four corners of the unit's bounding box
+        points_to_check = [
+            (position.x - self.size, position.y - self.size),
+            (position.x + self.size, position.y - self.size),
+            (position.x - self.size, position.y + self.size),
+            (position.x + self.size, position.y + self.size),
+        ]
+        for p in points_to_check:
+            if self.tile_map.get_tile_at_pixel(p[0], p[1]) == Tile.WALL:
+                return True
+        return False
+
     def update(self, actions, world_projectiles):
         """
-        Updates the unit's state based on the MLP's output actions.
+        Updates the unit's state based on MLP actions, including wall collision and sliding.
         """
         if self.attack_cooldown > 0:
             self.attack_cooldown -= 1
 
-        # Actions are expected to be in the range [-1, 1] from the tanh activation
+        # --- Calculate movement from MLP actions ---
         turn_action = actions[0][0]
         move_action = actions[0][1]
-
         self.angle += turn_action * 0.1
         forward_speed = max(0, move_action) * self.speed
         self.velocity = pygame.Vector2(forward_speed, 0).rotate(np.rad2deg(self.angle))
-        self.position += self.velocity
 
-        # Handle attack action if it exists
+        # --- Handle collision and sliding ---
+        # Move on x-axis
+        new_pos_x = self.position.copy()
+        new_pos_x.x += self.velocity.x
+        if not self._check_wall_collision(new_pos_x):
+            self.position.x = new_pos_x.x
+
+        # Move on y-axis
+        new_pos_y = self.position.copy()
+        new_pos_y.y += self.velocity.y
+        if not self._check_wall_collision(new_pos_y):
+            self.position.y = new_pos_y.y
+
+        # --- Handle attack action ---
         if len(actions[0]) > 2:
             attack_action = actions[0][2]
             if attack_action > 0.5: # Threshold to fire
