@@ -1,3 +1,12 @@
+"""
+The main entry point for the MLP Training Simulation application.
+
+This script initializes Pygame, sets up the main game window, and creates
+instances of the core components: `TrainingSimulation`, `TileMap`, `DesignMenu`,
+and `SimulationUI`. It contains the main game loop, which handles event
+processing, state management (switching between simulation, design menu, and
+map editor), and rendering for the entire application.
+"""
 import pygame
 import pygame_gui
 import sys
@@ -19,11 +28,23 @@ BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 
 class GameState(Enum):
+    """An enumeration for the different states of the application."""
     SIMULATION = 1
     DESIGN_MENU = 2
     MAP_EDITOR = 3
 
 def main():
+    """
+    The main function for the application.
+
+    This function sets up all necessary objects and runs the main game loop.
+    The loop is responsible for:
+    - Handling user input (keyboard, mouse, UI events).
+    - Updating the simulation state based on the current `GameState`.
+    - Managing transitions between different game states.
+    - Drawing all visible elements to the screen.
+    - Controlling the simulation speed.
+    """
     # --- Pygame Setup ---
     pygame.init()
     screen = pygame.display.set_mode((WORLD_WIDTH, WORLD_HEIGHT))

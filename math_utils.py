@@ -1,21 +1,38 @@
+"""
+Provides mathematical utility functions, primarily for geometric calculations.
+
+This module contains functions for complex geometric problems, such as
+vectorized line-circle intersection tests, which are critical for the
+performance of the unit's perception system.
+"""
 def vectorized_line_circle_intersection(p1s, p2s, centers, radii, xp):
-    """
-    Calculates intersections between N line segments and M circles in a vectorized manner.
-    This is a GPU-compatible, vectorized implementation of the geometric problem.
+    """Calculates intersections between N line segments and M circles.
+
+    This is a high-performance, vectorized implementation of the geometric
+    problem of finding the intersection points between a batch of line
+    segments and a batch of circles. It is designed to be compatible with
+    both NumPy (for CPU execution) and CuPy (for GPU acceleration), allowing
+    it to be used in the multiprocessing worker functions for maximum speed.
+
+    The calculation is based on solving a quadratic equation derived from the
+    vector form of the line and circle equations.
 
     Args:
-        p1s (xp.ndarray): Array of line start points, shape (N, 2).
-        p2s (xp.ndarray): Array of line end points, shape (N, 2).
-        centers (xp.ndarray): Array of circle centers, shape (M, 2).
-        radii (xp.ndarray): Array of circle radii, shape (M,).
-        xp (module): The numpy or cupy module to use for calculations.
+        p1s (xp.ndarray): An array of line start points, with shape (N, 2).
+        p2s (xp.ndarray): An array of line end points, with shape (N, 2).
+        centers (xp.ndarray): An array of circle center points, with shape (M, 2).
+        radii (xp.ndarray): An array of circle radii, with shape (M,).
+        xp (module): The array library to use for calculations (either `numpy`
+            or `cupy`).
 
     Returns:
-        tuple: A tuple containing:
-            - min_distances (xp.ndarray): An array of shape (N,) with the minimum intersection
-                                          distance for each line. Infinity if no intersection.
-            - min_indices (xp.ndarray): An array of shape (N,) with the index of the circle
-                                        that caused the minimum intersection for each line.
+        tuple[xp.ndarray, xp.ndarray]: A tuple containing:
+            - min_distances (xp.ndarray): An array of shape (N,) with the
+              minimum intersection distance for each line segment. If a line
+              does not intersect any circle, its distance is `xp.inf`.
+            - min_indices (xp.ndarray): An array of shape (N,) with the index
+              of the circle that caused the minimum intersection for each line.
+              The index is -1 if there is no intersection.
     """
     # N = number of lines, M = number of circles
     N = p1s.shape[0]
@@ -93,9 +110,22 @@ import pygame
 import numpy as np
 
 def iterative_line_circle_intersection(p1, p2, circle_center, radius):
-    """
-    Calculates the intersection of a line segment and a circle. Non-vectorized.
-    Returns the distance from p1 to the closest intersection point, or None.
+    """Calculates the intersection of a single line segment and a circle.
+
+    This is a non-vectorized, iterative implementation used as a fallback
+    when the vectorized version is not available. It checks for an intersection
+    between one line segment and one circle.
+
+    Args:
+        p1 (pygame.Vector2): The start point of the line segment.
+        p2 (pygame.Vector2): The end point of the line segment.
+        circle_center (pygame.Vector2): The center of the circle.
+        radius (float): The radius of the circle.
+
+    Returns:
+        float or None: The distance from `p1` to the closest intersection
+        point along the line segment. Returns `None` if there is no
+        intersection within the segment.
     """
     p1 = pygame.Vector2(p1)
     p2 = pygame.Vector2(p2)

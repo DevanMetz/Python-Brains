@@ -11,6 +11,8 @@ This project is a simulation environment for designing and training "brains" for
 -   **Genetic Algorithm**: New generations of brains are created by evolving the most successful brains from the previous generation through elitism, crossover, and mutation.
 -   **Typed Whisker Perception**: Units "see" the world using rays (whiskers). This system can distinguish between different object types (walls, enemies, other units), providing rich input for the AI.
 -   **Save & Load Brains**: Save the best-performing brain from a training session and load it back later to continue training or refine its architecture.
+-   **Editable Map**: A simple map editor is included, allowing you to draw walls for the AI to navigate around.
+-   **Performance Optimizations**: The simulation is heavily optimized using multiprocessing for parallel processing, a Quadtree for efficient collision detection, and optional CuPy integration for GPU-accelerated computations.
 
 ## Requirements
 
@@ -18,6 +20,7 @@ This project is a simulation environment for designing and training "brains" for
 -   NumPy
 -   Pygame
 -   Pygame GUI
+-   **Optional**: CuPy (for GPU acceleration). If not installed, the application will automatically fall back to the NumPy-based CPU implementation.
 
 These packages are listed in `requirements.txt`.
 
@@ -53,3 +56,16 @@ The application has two main screens: the **Simulation View** and the **AI Desig
     -   This is the main view where you can watch your population of units learn.
     -   Use the "Train Navigation" and "Train Combat" buttons at the bottom to switch between the two fitness modes. The simulation will reset with the new goal.
     -   Use the "Save Fittest Brain" button to save the best-performing brain of the current population to the `saved_brains/` directory.
+    -   Use the sliders at the bottom right to control the **Total Population** size, the number of **Drawn Units** (for performance), and the **Steps** per generation.
+
+-   **Map Editor**:
+    -   Click the "Map Editor" button to enter this mode.
+    -   **Left-click** to draw walls.
+    -   **Right-click** to erase walls.
+    -   **Middle-click** to move the navigation target.
+    -   Click "Back to Simulation" to apply your changes. The simulation's multiprocessing pool will automatically restart to use the new map.
+
+## In-Simulation Controls
+
+-   **Up/Down Arrow Keys**: Increase/Decrease the simulation speed.
+-   **Q Key**: Toggle the debug view for the Quadtree, which shows how the world is being spatially partitioned.
