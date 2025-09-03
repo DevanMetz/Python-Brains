@@ -189,7 +189,16 @@ def process_unit_logic(args):
             px, py = unit_x + dx, unit_y + dy
             tile_val = Tile.WALL.value
             if 0 <= px < grid_width and 0 <= py < grid_height:
-                tile_val = dynamic_grid[px, py] if dynamic_grid[px, py] != Tile.EMPTY.value else static_grid[px, py]
+                dynamic_val = dynamic_grid[px, py]
+                if dynamic_val == Tile.UNIT.value:
+                    # Treat other units as empty space for perception
+                    tile_val = Tile.EMPTY.value
+                elif dynamic_val != Tile.EMPTY.value:
+                    # See the target
+                    tile_val = dynamic_val
+                else:
+                    # See walls
+                    tile_val = static_grid[px, py]
             inputs[idx] = tile_val
             idx += 1
     dx_to_target = (target_pos[0] - unit_x) / grid_width
