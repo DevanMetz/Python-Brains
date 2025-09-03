@@ -39,16 +39,17 @@ def test_determine_new_position_cannot_move_into_wall():
     final_x, final_y = determine_new_position(start_x, start_y, Action.MOVE_E, static_grid, dynamic_grid)
     assert (final_x, final_y) == (start_x, start_y)
 
-def test_determine_new_position_cannot_move_into_unit():
-    """Tests that a unit cannot move into another unit."""
+def test_determine_new_position_can_move_into_unit():
+    """Tests that a unit CAN move into a tile occupied by another unit."""
     static_grid = np.full((10, 10), Tile.EMPTY.value, dtype=int)
     dynamic_grid = np.full((10, 10), Tile.EMPTY.value, dtype=int)
     dynamic_grid[6, 5] = Tile.UNIT.value # Another unit is here
 
     start_x, start_y = 5, 5
 
+    # The new logic ignores other units, so the move should be successful
     final_x, final_y = determine_new_position(start_x, start_y, Action.MOVE_E, static_grid, dynamic_grid)
-    assert (final_x, final_y) == (start_x, start_y)
+    assert (final_x, final_y) == (6, 5)
 
 def test_determine_new_position_stay_action():
     """Tests that the STAY action results in no movement."""

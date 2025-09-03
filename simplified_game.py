@@ -6,10 +6,6 @@ import numpy as np
 from enum import Enum
 from mlp import MLP
 
-# --- Constants ---
-PERCEPTION_RADIUS = 1 # How many tiles away the unit can "see"
-NUM_NEIGHBORS = (PERCEPTION_RADIUS * 2 + 1) ** 2 - 1
-
 # --- Enums ---
 class Tile(Enum):
     """An enumeration for the different types of tiles."""
@@ -71,15 +67,26 @@ class SimplifiedUnit:
 
 class SimplifiedGame:
     """Manages the overall state of the simplified simulation."""
-    def __init__(self, width=40, height=30, population_size=50):
+    def __init__(self, width=40, height=30, population_size=50, mlp_arch_str="16", perception_radius=1, steps_per_gen=100):
         self.tile_map = TileMap(width, height)
         self.units = []
         self.target = (width - 5, height // 2)
         self.population_size = population_size
         self.generation = 0
-        self.steps_per_generation = 100
 
-        self.mlp_arch = [NUM_NEIGHBORS + 2, 16, len(Action)]
+        self.perception_radius = perception_radius
+        self.steps_per_generation = steps_per_gen
+
+        # Build MLP architecture from string
+        try:
+            hidden_layers = [int(n.strip()) for n in mlp_arch_str.split(',') if n.strip()]
+        except ValueError:
+            print(f"Warning: Invalid MLP architecture string '{mlp_arch_str}'. Using default [16].")
+            hidden_layers = [16]
+
+        num_inputs = (self.perception_radius * 2 + 1)**2 - 1 + 2 # neighbors + target vector
+        num_outputs = len(Action)
+        self.mlp_arch = [num_inputs] + hidden_layers + [num_outputs]
 
         self._initialize_population()
         self._create_walls()
@@ -87,11 +94,11 @@ class SimplifiedGame:
     def _initialize_population(self):
         """Creates the initial population of units."""
         self.units = []
+        start_x = 5
+        start_y = self.tile_map.grid_height // 2
         for i in range(self.population_size):
-            x = np.random.randint(1, 10)
-            y = np.random.randint(1, self.tile_map.grid_height - 1)
             brain = MLP(self.mlp_arch)
-            self.units.append(SimplifiedUnit(id=i, x=x, y=y, brain=brain))
+            self.units.append(SimplifiedUnit(id=i, x=start_x, y=start_y, brain=brain))
         self.tile_map.update_dynamic_grid(self.units, self.target)
 
     def _create_walls(self):
@@ -106,8 +113,10 @@ class SimplifiedGame:
     def update_simulation_with_results(self, results):
         """Updates the positions of units based on multiprocessing results."""
         for unit_id, new_x, new_y in results:
-            self.units[unit_id].x = new_x
-            self.units[unit_id].y = new_y
+            # This can cause an index out of bounds if the unit list has changed
+            if unit_id < len(self.units):
+                self.units[unit_id].x = new_x
+                self.units[unit_id].y = new_y
         self.tile_map.update_dynamic_grid(self.units, self.target)
 
     def evolve_population(self):
@@ -122,10 +131,12 @@ class SimplifiedGame:
 
         next_gen_units = []
         num_elites = self.population_size // 10
+        start_x = 5
+        start_y = self.tile_map.grid_height // 2
         for i in range(num_elites):
             elite_unit = sorted_units[i].clone()
-            elite_unit.x = np.random.randint(1, 10)
-            elite_unit.y = np.random.randint(1, self.tile_map.grid_height - 1)
+            elite_unit.x = start_x
+            elite_unit.y = start_y
             next_gen_units.append(elite_unit)
 
         while len(next_gen_units) < self.population_size:
@@ -133,9 +144,7 @@ class SimplifiedGame:
             parent2 = np.random.choice(sorted_units[:self.population_size//2])
             child_brain = MLP.crossover(parent1.brain, parent2.brain)
             child_brain.mutate(mutation_rate=0.05, mutation_amount=0.1)
-            x = np.random.randint(1, 10)
-            y = np.random.randint(1, self.tile_map.grid_height - 1)
-            next_gen_units.append(SimplifiedUnit(id=len(next_gen_units), x=x, y=y, brain=child_brain))
+            next_gen_units.append(SimplifiedUnit(id=len(next_gen_units), x=start_x, y=start_y, brain=child_brain))
 
         self.units = next_gen_units
         for i, unit in enumerate(self.units):
@@ -163,8 +172,7 @@ def determine_new_position(unit_x, unit_y, action, static_grid, dynamic_grid):
 
     if 0 <= new_x < grid_width and 0 <= new_y < grid_height:
         is_wall = static_grid[new_x, new_y] == Tile.WALL.value
-        is_unit = dynamic_grid[new_x, new_y] == Tile.UNIT.value
-        if not is_wall and not is_unit:
+        if not is_wall:
             final_x, final_y = new_x, new_y
 
     return final_x, final_y
@@ -176,18 +184,19 @@ def process_unit_logic(args):
     Runs a single simulation step for one unit.
     This is a top-level function to be called by a multiprocessing pool.
     """
-    unit_id, unit_x, unit_y, brain_weights, brain_biases, static_grid, dynamic_grid, target_pos, mlp_arch = args
+    unit_id, unit_x, unit_y, brain_weights, brain_biases, static_grid, dynamic_grid, target_pos, mlp_arch, perception_radius = args
 
     brain = MLP(mlp_arch)
     brain.weights = brain_weights
     brain.biases = brain_biases
 
-    inputs = np.zeros(NUM_NEIGHBORS + 2)
+    num_neighbors = (perception_radius * 2 + 1)**2 - 1
+    inputs = np.zeros(num_neighbors + 2)
     idx = 0
     grid_width, grid_height = static_grid.shape
 
-    for dy in range(-PERCEPTION_RADIUS, PERCEPTION_RADIUS + 1):
-        for dx in range(-PERCEPTION_RADIUS, PERCEPTION_RADIUS + 1):
+    for dy in range(-perception_radius, perception_radius + 1):
+        for dx in range(-perception_radius, perception_radius + 1):
             if dx == 0 and dy == 0: continue
             px, py = unit_x + dx, unit_y + dy
             tile_val = Tile.WALL.value
@@ -198,8 +207,8 @@ def process_unit_logic(args):
 
     dx_to_target = (target_pos[0] - unit_x) / grid_width
     dy_to_target = (target_pos[1] - unit_y) / grid_height
-    inputs[NUM_NEIGHBORS] = dx_to_target
-    inputs[NUM_NEIGHBORS + 1] = dy_to_target
+    inputs[num_neighbors] = dx_to_target
+    inputs[num_neighbors + 1] = dy_to_target
 
     action_probs = brain.forward(inputs)
     action = Action(np.argmax(action_probs))
