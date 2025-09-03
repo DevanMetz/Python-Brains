@@ -390,11 +390,14 @@ class TrainingSimulation:
             print("\n" + "="*60)
             print(" WARNING: GPU ACCELERATION NOT AVAILABLE ".center(60, "="))
             print("="*60)
-            print(" CuPy library not found or no compatible NVIDIA GPU detected.")
+            print(" CuPy not found or no compatible GPU (NVIDIA/AMD) detected.")
             print(" The simulation will run in a slower, CPU-only mode.")
             print(" To enable GPU acceleration:")
-            print(" 1. Ensure you have an NVIDIA GPU with CUDA drivers installed.")
-            print(" 2. Install the correct CuPy version (e.g., 'pip install cupy-cuda11x').")
+            print(" 1. Ensure you have a compatible GPU and drivers installed:")
+            print("    - NVIDIA: CUDA Toolkit")
+            print("    - AMD: ROCm Drivers")
+            print(" 2. Install the correct CuPy version for your hardware.")
+            print("    (See instructions in 'requirements.txt')")
             print("="*60 + "\n")
 
 

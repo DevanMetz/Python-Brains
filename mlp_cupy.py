@@ -4,12 +4,19 @@ from mlp import MLP
 # Try to import cupy and check for a working GPU, but don't fail if it's not available
 try:
     import cupy as cp
-    # A more robust check for availability: will fail if no driver/device
-    if cp.cuda.runtime.getDeviceCount() > 0:
+    # A more robust, platform-agnostic check for GPU availability.
+    # This will detect either an NVIDIA (CUDA) or AMD (ROCm) GPU.
+    cuda_is_available = hasattr(cp, 'cuda') and cp.cuda.is_available()
+    rocm_is_available = hasattr(cp, 'rocm') and cp.rocm.is_available()
+    if cuda_is_available or rocm_is_available:
         CUPY_AVAILABLE = True
+        print("SUCCESS: CuPy found a compatible GPU (NVIDIA CUDA or AMD ROCm).")
     else:
         CUPY_AVAILABLE = False
-except Exception:
+except (ImportError, Exception) as e:
+    # Catching a broad exception to handle cases like missing drivers,
+    # which can raise errors other than ImportError.
+    # print(f"CuPy initialization failed: {e}") # Optional: for debugging
     CUPY_AVAILABLE = False
 
 class MLPCupy(MLP):
