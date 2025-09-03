@@ -71,6 +71,16 @@ def load_or_create_default_map():
         save_map(temp_game, DEFAULT_MAP_PATH)
         return temp_game.tile_map.static_grid
 
+def create_game_config_from_settings(settings):
+    """Converts UI settings into a configuration for SimplifiedGame."""
+    config = settings.copy()
+    if 'vision_radius' in config:
+        config['perception_radius'] = config.pop('vision_radius')
+    if 'sim_length' in config:
+        config['steps_per_gen'] = config.pop('sim_length')
+    config.pop('sps', None)
+    return config
+
 def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -119,18 +129,20 @@ def main():
                     loaded_map = load_map(SAVED_MAP_PATH)
                     if loaded_map is not None:
                         current_target = game.target
+                        game_config = create_game_config_from_settings(settings)
                         game = SimplifiedGame(
                             width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=loaded_map,
-                            **settings)
+                            **game_config)
                         game.target = current_target
                         step_counter = 0
 
                 elif event.ui_element == ui.apply_button:
                     current_map = game.tile_map.static_grid.copy()
                     current_target = game.target
+                    game_config = create_game_config_from_settings(settings)
                     game = SimplifiedGame(
                         width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=current_map,
-                        **settings)
+                        **game_config)
                     game.target = current_target
                     step_counter = 0
 
