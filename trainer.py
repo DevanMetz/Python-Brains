@@ -24,7 +24,8 @@ def init_worker(tile_map):
 
 def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     """
-    A standalone version of the Unit.get_inputs method, optimized to use local object data.
+    Calculates MLP inputs. Uses a vectorized CuPy implementation for whisker-object
+    intersections if available, otherwise falls back to an iterative approach.
     """
     unit_pos = pygame.Vector2(unit_data['position'])
     unit_angle = unit_data['angle']
@@ -37,55 +38,103 @@ def get_unit_inputs(unit_data, local_objects_data, target_pos_data):
     whisker_inputs = np.zeros((num_whiskers, len(perceivable_types)))
     whisker_debug_info = []
 
-    # This function now receives a pre-filtered list of local objects from the Quadtree
-    all_objects_data = local_objects_data
+    try:
+        # Use CuPy for vectorized calculations if available
+        import cupy as cp
+        from math_utils import vectorized_line_circle_intersection
+        xp = cp
 
-    for i, whisker_angle in enumerate(whisker_angles):
-        abs_angle = unit_angle + whisker_angle
-        start_point = unit_pos
-        end_point = unit_pos + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle))
+        # --- Prepare whisker data on GPU ---
+        abs_angles_gpu = xp.asarray(unit_angle + whisker_angles)
+        start_points_gpu = xp.asarray(unit_pos.xy).reshape(1, 2)
+        end_points_gpu = start_points_gpu + xp.stack([
+            xp.cos(abs_angles_gpu) * whisker_length,
+            xp.sin(abs_angles_gpu) * whisker_length
+        ], axis=1)
 
-        closest_dist = whisker_length
-        detected_type = None
-        closest_intersect_point = end_point
+        # --- Prepare object data on GPU ---
+        if local_objects_data:
+            centers_gpu = xp.asarray([d['position'] for d in local_objects_data])
+            radii_gpu = xp.asarray([d['size'] for d in local_objects_data])
+            obj_distances, obj_indices = vectorized_line_circle_intersection(
+                start_points_gpu, end_points_gpu, centers_gpu, radii_gpu, xp)
+        else:
+            obj_distances = xp.full(num_whiskers, xp.inf)
+            obj_indices = xp.full(num_whiskers, -1, dtype=xp.int32)
 
+        # --- Wall detection (still iterative for now) ---
+        wall_distances = np.full(num_whiskers, np.inf)
         if "wall" in perceivable_types:
-            dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
-            steps = max(abs(dx), abs(dy))
-            if steps > 0:
-                x_inc, y_inc = dx / steps, dy / steps
-                x, y = start_point.x, start_point.y
-                for _ in range(int(steps)):
-                    grid_x = int(x // _tile_map_global.tile_size)
-                    grid_y = int(y // _tile_map_global.tile_size)
-                    if _tile_map_global.get_tile(grid_x, grid_y) == Tile.WALL:
-                        closest_dist = unit_pos.distance_to(pygame.Vector2(x, y))
-                        detected_type = "wall"
-                        closest_intersect_point = pygame.Vector2(x, y)
-                        break
-                    x += x_inc
-                    y += y_inc
+            for i, angle in enumerate(whisker_angles):
+                start_point = unit_pos
+                end_point = start_point + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(unit_angle + angle))
+                dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
+                steps = int(max(abs(dx), abs(dy)))
+                if steps > 0:
+                    x_inc, y_inc = dx / steps, dy / steps
+                    for j in range(steps):
+                        x = start_point.x + j * x_inc
+                        y = start_point.y + j * y_inc
+                        if _tile_map_global.get_tile_at_pixel(x, y) == Tile.WALL:
+                            wall_distances[i] = unit_pos.distance_to(pygame.Vector2(x, y))
+                            break
 
-        for obj_data in all_objects_data:
-            dist = line_circle_intersection(start_point, end_point, pygame.Vector2(obj_data['position']), obj_data['size'])
-            if dist is not None and dist < closest_dist:
-                closest_dist = dist
-                detected_type = obj_data['type']
-                closest_intersect_point = start_point + pygame.Vector2(dist, 0).rotate(np.rad2deg(abs_angle))
+        # --- Combine results ---
+        wall_distances_gpu = xp.asarray(wall_distances)
+        obj_hit_is_closer = obj_distances < wall_distances_gpu
 
-        # Store debug info regardless of hit, so we can draw the whisker's full length
-        whisker_debug_info.append({
-            'start': (start_point.x, start_point.y),
-            'end': (closest_intersect_point.x, closest_intersect_point.y),
-            'full_end': (end_point.x, end_point.y),
-            'type': detected_type
-        })
+        final_distances = xp.asnumpy(xp.where(obj_hit_is_closer, obj_distances, wall_distances_gpu))
+        final_indices = xp.asnumpy(xp.where(obj_hit_is_closer, obj_indices, -2)) # -2 for wall
 
-        if detected_type and detected_type in perceivable_types:
-            type_index = perceivable_types.index(detected_type)
-            clamped_dist = max(0, min(closest_dist, whisker_length))
-            whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+        # --- Final processing on CPU ---
+        object_types = [d['type'] for d in local_objects_data]
+        for i in range(num_whiskers):
+            dist = final_distances[i]
+            idx = final_indices[i]
+            detected_type = None
+            if dist != np.inf:
+                detected_type = "wall" if idx == -2 else object_types[idx]
 
+            if detected_type and detected_type in perceivable_types:
+                type_index = perceivable_types.index(detected_type)
+                clamped_dist = max(0, min(dist, whisker_length))
+                whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+
+    except (ImportError, cp.cuda.runtime.CudaError):
+        # --- Fallback to original iterative method ---
+        from math_utils import iterative_line_circle_intersection
+        for i, whisker_angle in enumerate(whisker_angles):
+            abs_angle = unit_angle + whisker_angle
+            start_point = unit_pos
+            end_point = unit_pos + pygame.Vector2(whisker_length, 0).rotate(np.rad2deg(abs_angle))
+
+            closest_dist = whisker_length
+            detected_type = None
+
+            if "wall" in perceivable_types:
+                dx, dy = end_point.x - start_point.x, end_point.y - start_point.y
+                steps = int(max(abs(dx), abs(dy)))
+                if steps > 0:
+                    x_inc, y_inc = dx / steps, dy / steps
+                    for j in range(steps):
+                        x, y = start_point.x + j * x_inc, start_point.y + j * y_inc
+                        if _tile_map_global.get_tile_at_pixel(x,y) == Tile.WALL:
+                            closest_dist = unit_pos.distance_to(pygame.Vector2(x,y))
+                            detected_type = "wall"
+                            break
+
+            for obj_data in local_objects_data:
+                dist = iterative_line_circle_intersection(start_point, end_point, pygame.Vector2(obj_data['position']), obj_data['size'])
+                if dist is not None and dist < closest_dist:
+                    closest_dist = dist
+                    detected_type = obj_data['type']
+
+            if detected_type and detected_type in perceivable_types:
+                type_index = perceivable_types.index(detected_type)
+                clamped_dist = max(0, min(closest_dist, whisker_length))
+                whisker_inputs[i, type_index] = 1.0 - (clamped_dist / whisker_length)
+
+    # --- Target and other inputs (common to both paths) ---
     target_pos = pygame.Vector2(target_pos_data)
     relative_vec = target_pos - unit_pos
     relative_vec = relative_vec.rotate(-np.rad2deg(unit_angle))
@@ -170,7 +219,6 @@ class TrainingSimulation:
 
         # Create the initial population
         self.population = self._create_initial_population()
-        self.sorted_population = [] # For drawing the fittest units
         self.population_map = {unit.id: unit for unit in self.population}
 
         # Create the Quadtree for spatial partitioning
@@ -270,15 +318,10 @@ class TrainingSimulation:
 
     def get_drawable_units(self):
         """
-        Returns the list of units that should be drawn on the screen.
-        If a sorted list of the previous generation is available, it returns the fittest.
-        Otherwise, it returns a slice of the current population.
+        Returns a slice of the current population to be drawn on screen.
+        This ensures that the units shown are always the ones being actively simulated.
         """
-        if self.sorted_population:
-            return self.sorted_population[:self.num_to_draw]
-        else:
-            # Fallback for the very first generation before any fitness is calculated
-            return self.population[:self.num_to_draw]
+        return self.population[:self.num_to_draw]
 
     def evolve_population(self, elitism_frac=0.1, mutation_rate=0.05):
         """
@@ -297,7 +340,6 @@ class TrainingSimulation:
                 fitness_scores.append((unit, fitness))
 
         fitness_scores.sort(key=lambda x: x[1], reverse=True)
-        self.sorted_population = [item[0] for item in fitness_scores]
         new_population = []
         num_elites = int(self.population_size * elitism_frac)
         elite_units = [item[0] for item in fitness_scores[:num_elites]]

@@ -114,3 +114,6 @@ While the previous optimizations focused on the simulation's computational bottl
     -   **Population Size:** Allows the user to dynamically change the total number of units in the simulation.
     -   **Drawn Units:** Allows the user to control how many of the fittest units are rendered on screen.
 -   **UI Refactoring:** To accommodate these new controls cleanly, the simulation-related UI elements were refactored from `main.py` into a dedicated `SimulationUI` class in `ui.py`.
+
+### 8.5. Vectorized Perception
+To further optimize the perception logic, the final step of checking a whisker ray against the localized list of objects (provided by the Quadtree) was also vectorized. A new `vectorized_line_circle_intersection` function was implemented in `math_utils.py` using CuPy (with a NumPy fallback). This function computes all whisker-object intersections for a unit in a single, parallel GPU operation, replacing the iterative Python `for` loop and providing another significant performance increase.

@@ -19,7 +19,7 @@ class Rectangle:
                     self.bottom < other.top or
                     other.bottom < self.top)
 
-MAX_DEPTH = 8
+MAX_DEPTH = 5
 
 class QuadTree:
     """
