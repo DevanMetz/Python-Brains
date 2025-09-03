@@ -1,0 +1,15 @@
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5727:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+pygame-ce 2.5.5 (SDL 2.32.6, Python 3.12.11)
+WARNING: PyOpenCL could not initialize. GPU acceleration will be disabled. Error: no CL platforms available to ICD loader. Install a CL driver ('ICD', such as pocl, rocm, Intel CL) to fix this. See pyopencl docs for help: https://documen.tician.de/pyopencl/misc.html#installation
+
+============================================================
+ WARNING: GPU ACCELERATION NOT AVAILABLE
+============================================================

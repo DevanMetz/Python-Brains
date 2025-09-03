@@ -117,8 +117,8 @@ def main():
             if current_state == GameState.MAP_EDITOR:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 2: # Middle mouse
                     mx, my = pygame.mouse.get_pos()
-                    trainer.target.position.x = mx
-                    trainer.target.position.y = my
+                    trainer.target.grid_x = mx // TILE_SIZE
+                    trainer.target.grid_y = my // TILE_SIZE
 
             if event.type == pygame_gui.UI_HORIZONTAL_SLIDER_MOVED:
                 if event.ui_element == simulation_ui.pop_size_slider:
@@ -208,7 +208,6 @@ def main():
             tile_map.draw(screen) # Draw map behind units
             for obj in trainer.world_objects: obj.draw(screen)
             for unit in trainer.get_drawable_units(): unit.draw(screen)
-            for proj in trainer.projectiles: proj.draw(screen)
 
             # Draw the quadtree for debugging
             if draw_quadtree and hasattr(trainer, 'quadtree'):
