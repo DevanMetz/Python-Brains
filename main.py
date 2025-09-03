@@ -69,7 +69,7 @@ def main():
 
 
     design_menu = DesignMenu(
-        rect=pygame.Rect((WORLD_WIDTH / 2 - 150, WORLD_HEIGHT / 2 - 200), (300, 400)),
+        rect=pygame.Rect((WORLD_WIDTH / 2 - 150, WORLD_HEIGHT / 2 - 230), (300, 460)),
         ui_manager=ui_manager)
 
     # --- Training Mode Buttons ---
@@ -108,6 +108,9 @@ def main():
                 if event.ui_element == design_menu.whisker_slider:
                     num_whiskers = int(event.value)
                     design_menu.whisker_count_label.set_text(str(num_whiskers))
+                elif event.ui_element == design_menu.whisker_length_slider:
+                    length = int(event.value)
+                    design_menu.whisker_length_value_label.set_text(str(length))
 
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
                 if event.ui_element == to_design_menu_button:
@@ -118,13 +121,14 @@ def main():
                     current_state = GameState.SIMULATION
                 elif event.ui_element == design_menu.update_button:
                     num_whiskers = int(design_menu.whisker_slider.get_current_value())
+                    whisker_length = int(design_menu.whisker_length_slider.get_current_value())
                     attack_enabled = design_menu.attack_checkbox.is_checked
                     perceivable_types = design_menu.get_perceivable_types()
                     num_inputs = num_whiskers * len(perceivable_types) + 2
                     num_outputs = 3 if attack_enabled else 2
                     new_arch = design_menu.get_architecture_from_input(input_nodes=num_inputs, output_nodes=num_outputs)
                     if new_arch:
-                        trainer.rebuild_with_new_architecture(new_arch, num_whiskers, perceivable_types)
+                        trainer.rebuild_with_new_architecture(new_arch, num_whiskers, perceivable_types, whisker_length)
                         best_fitness = 0
                         current_state = GameState.SIMULATION
                 elif event.ui_element == design_menu.close_button:

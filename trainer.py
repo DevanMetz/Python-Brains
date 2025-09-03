@@ -12,12 +12,13 @@ class TrainingSimulation:
     """
     Manages the genetic algorithm training process.
     """
-    def __init__(self, population_size, world_size, tile_map, num_whiskers=7, perceivable_types=None):
+    def __init__(self, population_size, world_size, tile_map, num_whiskers=7, perceivable_types=None, whisker_length=150):
         self.population_size = population_size
         self.world_width, self.world_height = world_size
         self.tile_map = tile_map
         self.generation = 0
         self.num_whiskers = num_whiskers
+        self.whisker_length = whisker_length
         self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "unit"]
         self.training_mode = TrainingMode.NAVIGATE
 
@@ -42,6 +43,7 @@ class TrainingSimulation:
             unit = Unit(
                 x=50, y=self.world_height / 2, brain=brain,
                 num_whiskers=self.num_whiskers,
+                whisker_length=self.whisker_length,
                 perceivable_types=self.perceivable_types,
                 tile_map=self.tile_map
             )
@@ -112,7 +114,7 @@ class TrainingSimulation:
             new_unit = Unit(
                 x=50, y=self.world_height / 2, brain=elite_unit.brain,
                 num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types,
-                tile_map=self.tile_map
+                whisker_length=self.whisker_length, tile_map=self.tile_map
             )
             new_population.append(new_unit)
 
@@ -132,7 +134,7 @@ class TrainingSimulation:
             new_unit = Unit(
                 x=50, y=self.world_height / 2, brain=child_brain,
                 num_whiskers=self.num_whiskers, perceivable_types=self.perceivable_types,
-                tile_map=self.tile_map
+                whisker_length=self.whisker_length, tile_map=self.tile_map
             )
             new_population.append(new_unit)
 
@@ -142,15 +144,16 @@ class TrainingSimulation:
         # Return best fitness for logging
         return fitness_scores[0][1]
 
-    def rebuild_with_new_architecture(self, new_arch, num_whiskers, perceivable_types):
+    def rebuild_with_new_architecture(self, new_arch, num_whiskers, perceivable_types, whisker_length):
         """
         Re-initializes the simulation with a new MLP architecture and I/O config.
         """
-        print(f"Creating new population with arch: {new_arch}, {num_whiskers} whiskers, sensing: {perceivable_types}")
+        print(f"Creating new population with arch: {new_arch}, {num_whiskers} whiskers, {whisker_length} length, sensing: {perceivable_types}")
         self.mlp_architecture = new_arch
         self.num_whiskers = num_whiskers
         self.perceivable_types = perceivable_types
-        self.population = self._create_initial_population() # This will now use the new tile_map correctly
+        self.whisker_length = whisker_length
+        self.population = self._create_initial_population()
         self.projectiles = [] # Clear projectiles
         self.enemy.health = 100 # Reset enemy health
         for unit in self.population:

@@ -8,7 +8,7 @@ class Unit:
     """
     Represents a single unit in the game, controlled by an MLP brain.
     """
-    def __init__(self, x, y, tile_map, brain=None, num_whiskers=7, perceivable_types=None):
+    def __init__(self, x, y, tile_map, brain=None, num_whiskers=7, whisker_length=150, perceivable_types=None):
         self.position = pygame.Vector2(x, y)
         self.tile_map = tile_map
         self.angle = np.random.uniform(0, 2 * np.pi) # Facing direction in radians
@@ -21,6 +21,7 @@ class Unit:
 
         self.brain = brain
         self.num_whiskers = num_whiskers
+        self.whisker_length = whisker_length
         self.perceivable_types = perceivable_types if perceivable_types is not None else ["wall", "enemy", "target", "unit"]
 
         self.attack_cooldown = 0
@@ -30,7 +31,6 @@ class Unit:
             self.whisker_angles = np.linspace(-np.pi / 2, np.pi / 2, self.num_whiskers)
         else:
             self.whisker_angles = np.array([0]) # Single whisker facing forward
-        self.whisker_length = 150
         self.whisker_debug_info = [] # To store data for drawing
 
     def get_inputs(self, world_objects):
@@ -51,15 +51,26 @@ class Unit:
             detected_type = None
             closest_intersect_point = end_point
 
-            # --- Detect Walls from TileMap by sampling points ---
+            # --- Detect Walls from TileMap using DDA algorithm ---
             if "wall" in self.perceivable_types:
-                for step in range(int(self.whisker_length)):
-                    check_point = start_point + pygame.Vector2(step, 0).rotate(np.rad2deg(abs_angle))
-                    if self.tile_map.get_tile_at_pixel(check_point.x, check_point.y) == Tile.WALL:
-                        closest_dist = self.position.distance_to(check_point)
-                        detected_type = "wall"
-                        closest_intersect_point = check_point
-                        break # Found the closest wall on this whisker
+                dx = end_point.x - start_point.x
+                dy = end_point.y - start_point.y
+
+                steps = max(abs(dx), abs(dy))
+                if steps > 0:
+                    x_inc = dx / steps
+                    y_inc = dy / steps
+
+                    x, y = start_point.x, start_point.y
+                    for _ in range(int(steps)):
+                        if self.tile_map.get_tile_at_pixel(x, y) == Tile.WALL:
+                            check_point = pygame.Vector2(x, y)
+                            closest_dist = self.position.distance_to(check_point)
+                            detected_type = "wall"
+                            closest_intersect_point = check_point
+                            break
+                        x += x_inc
+                        y += y_inc
 
             # --- Detect other objects (enemies, targets, etc.) ---
             for obj in world_objects:
