@@ -5,95 +5,95 @@ It uses Pygame for visualization and multiprocessing for parallel simulation.
 import pygame
 import pygame_gui
 import multiprocessing
+import numpy as np
+import time
+import os
 from enum import Enum
-from simplified_game import SimplifiedGame, Tile, process_unit_logic
+from simplified_game import SimplifiedGame, Tile, process_unit_logic, get_vision_inputs
 from simplified_ui import SimplifiedUI
 
 # --- Constants ---
-GRID_WIDTH, GRID_HEIGHT = 40, 30
+GRID_WIDTH, GRID_HEIGHT = 50, 30
 TILE_SIZE = 20
-UI_WIDTH = 200
-SCREEN_WIDTH, SCREEN_HEIGHT = GRID_WIDTH * TILE_SIZE + UI_WIDTH, GRID_HEIGHT * TILE_SIZE
+UI_WIDTH = 220
+VISUALIZER_HEIGHT = 250
+SCREEN_WIDTH = GRID_WIDTH * TILE_SIZE + UI_WIDTH
+SCREEN_HEIGHT = GRID_HEIGHT * TILE_SIZE + VISUALIZER_HEIGHT
 FPS = 60
-POPULATION_SIZE = 100
+MAPS_DIR = "maps"
+DEFAULT_MAP_PATH = os.path.join(MAPS_DIR, "default.csv")
+SAVED_MAP_PATH = os.path.join(MAPS_DIR, "saved_map.csv")
 
 # --- Colors ---
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-GRID_COLOR = (40, 40, 40)
-WALL_COLOR = (100, 100, 100)
-UNIT_COLOR = (0, 150, 255)
-TARGET_COLOR = (0, 255, 0)
-VISION_COLOR = (255, 255, 255, 50) # Faint white for vision circle
+BLACK, WHITE = (0, 0, 0), (255, 255, 255)
+GRID_COLOR, WALL_COLOR = (40, 40, 40), (100, 100, 100)
+UNIT_COLOR, TARGET_COLOR = (0, 150, 255), (0, 255, 0)
 
 class GameState(Enum):
-    SIMULATING = 1
-    EDITING = 2
+    SIMULATING, EDITING = 1, 2
 
-def draw_tile_map(screen, game):
-    """Draws the static part of the map (walls and grid)."""
+def draw_game_world(surface, game):
+    surface.fill(BLACK)
     for x in range(game.tile_map.grid_width):
         for y in range(game.tile_map.grid_height):
             if game.tile_map.static_grid[x, y] == Tile.WALL.value:
                 rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-                pygame.draw.rect(screen, WALL_COLOR, rect)
-
-    map_width_pixels = game.tile_map.grid_width * TILE_SIZE
-    map_height_pixels = game.tile_map.grid_height * TILE_SIZE
-    for x in range(0, map_width_pixels, TILE_SIZE):
-        pygame.draw.line(screen, GRID_COLOR, (x, 0), (x, map_height_pixels))
-    for y in range(0, map_height_pixels, TILE_SIZE):
-        pygame.draw.line(screen, GRID_COLOR, (0, y), (map_width_pixels, y))
-
-def draw_dynamic_elements(screen, game, settings):
-    """Draws the units and the target with transparency and vision circles."""
-    # Draw units with transparency
+                pygame.draw.rect(surface, WALL_COLOR, rect)
     unit_surface = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-    unit_surface.fill((*UNIT_COLOR, 180)) # 180/255 alpha
+    unit_surface.fill((*UNIT_COLOR, 180))
     for unit in game.units:
         rect = pygame.Rect(unit.x * TILE_SIZE, unit.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-        screen.blit(unit_surface, rect.topleft)
-
-    # Draw vision circle for the first unit to avoid clutter
-    if game.units:
-        first_unit = game.units[0]
-        vision_radius_px = settings['vision_radius'] * TILE_SIZE
-        # Ensure radius is at least 1 to be visible
-        if vision_radius_px > 0:
-            center_px = (first_unit.x * TILE_SIZE + TILE_SIZE // 2,
-                         first_unit.y * TILE_SIZE + TILE_SIZE // 2)
-
-            # To draw a transparent circle, we must draw it on a separate surface.
-            circle_surface_size = vision_radius_px * 2 + 4 # Add padding for line width
-            circle_surface = pygame.Surface((circle_surface_size, circle_surface_size), pygame.SRCALPHA)
-
-            pygame.draw.circle(
-                circle_surface,
-                VISION_COLOR,
-                (circle_surface_size // 2, circle_surface_size // 2),
-                vision_radius_px,
-                width=2
-            )
-            screen.blit(circle_surface, (center_px[0] - circle_surface_size // 2, center_px[1] - circle_surface_size // 2))
-
-    # Draw target (fully opaque)
+        surface.blit(unit_surface, rect.topleft)
     target_rect = pygame.Rect(game.target[0] * TILE_SIZE, game.target[1] * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-    pygame.draw.rect(screen, TARGET_COLOR, target_rect)
+    pygame.draw.rect(surface, TARGET_COLOR, target_rect)
+    for x in range(0, GRID_WIDTH * TILE_SIZE, TILE_SIZE):
+        pygame.draw.line(surface, GRID_COLOR, (x, 0), (x, GRID_HEIGHT * TILE_SIZE))
+    for y in range(0, GRID_HEIGHT * TILE_SIZE, TILE_SIZE):
+        pygame.draw.line(surface, GRID_COLOR, (0, y), (GRID_WIDTH * TILE_SIZE, y))
+
+def save_map(game, filepath):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    np.savetxt(filepath, game.tile_map.static_grid, delimiter=',', fmt='%d')
+    print(f"Map saved to {filepath}")
+
+def load_map(filepath):
+    if os.path.exists(filepath):
+        print(f"Loading map from {filepath}")
+        return np.loadtxt(filepath, delimiter=',').astype(int)
+    return None
+
+def load_or_create_default_map():
+    if os.path.exists(DEFAULT_MAP_PATH):
+        return load_map(DEFAULT_MAP_PATH)
+    else:
+        print("No default map found. Creating one.")
+        temp_game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT)
+        save_map(temp_game, DEFAULT_MAP_PATH)
+        return temp_game.tile_map.static_grid
 
 def main():
-    """Main function to run the simulation."""
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Simplified CPU Simulation")
     clock = pygame.time.Clock()
+    font = pygame.font.SysFont("Arial", 18)
+
+    game_world_rect = pygame.Rect(0, 0, GRID_WIDTH * TILE_SIZE, GRID_HEIGHT * TILE_SIZE)
+    controls_panel_rect = pygame.Rect(game_world_rect.right, 0, UI_WIDTH, SCREEN_HEIGHT - VISUALIZER_HEIGHT)
+    visualizer_panel_rect = pygame.Rect(0, game_world_rect.bottom, SCREEN_WIDTH, VISUALIZER_HEIGHT)
 
     ui_manager = pygame_gui.UIManager((SCREEN_WIDTH, SCREEN_HEIGHT))
-    ui_panel_rect = pygame.Rect(GRID_WIDTH * TILE_SIZE, 0, UI_WIDTH, SCREEN_HEIGHT)
-    ui = SimplifiedUI(rect=ui_panel_rect, manager=ui_manager)
+    ui = SimplifiedUI(rect=controls_panel_rect, manager=ui_manager)
+    visualizer_panel = pygame_gui.elements.UIPanel(relative_rect=visualizer_panel_rect, manager=ui_manager)
 
-    game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, population_size=POPULATION_SIZE)
+    game_world_surface = pygame.Surface(game_world_rect.size)
+
+    default_map = load_or_create_default_map()
+    game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=default_map)
+
     step_counter = 0
     current_state = GameState.SIMULATING
+    time_since_last_step, sps_counter, sps_timer, measured_sps = 0, 0, 0, 0
 
     multiprocessing.set_start_method("spawn", force=True)
     pool = multiprocessing.Pool(multiprocessing.cpu_count())
@@ -101,36 +101,36 @@ def main():
     running = True
     while running:
         time_delta = clock.tick(FPS) / 1000.0
+        sps_timer += time_delta
         settings = ui.get_current_settings()
 
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-
+            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: running = False
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
                 if event.ui_element == ui.mode_button:
-                    if current_state == GameState.SIMULATING:
-                        current_state = GameState.EDITING
-                        ui.show_editor_ui()
-                    else:
-                        current_state = GameState.SIMULATING
-                        ui.show_simulation_ui()
+                    current_state = GameState.EDITING if current_state == GameState.SIMULATING else GameState.SIMULATING
+                    ui.show_editor_ui() if current_state == GameState.EDITING else ui.show_simulation_ui()
+
+                elif event.ui_element == ui.save_map_button:
+                    save_map(game, SAVED_MAP_PATH)
+
+                elif event.ui_element == ui.load_map_button:
+                    loaded_map = load_map(SAVED_MAP_PATH)
+                    if loaded_map is not None:
+                        current_target = game.target
+                        game = SimplifiedGame(
+                            width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=loaded_map,
+                            **settings)
+                        game.target = current_target
+                        step_counter = 0
+
                 elif event.ui_element == ui.apply_button:
-                    # Preserve the current map and target when restarting
                     current_map = game.tile_map.static_grid.copy()
                     current_target = game.target
                     game = SimplifiedGame(
-                        width=GRID_WIDTH, height=GRID_HEIGHT,
-                        population_size=settings['population_size'],
-                        mlp_arch_str=settings['mlp_arch_str'],
-                        perception_radius=settings['vision_radius'],
-                        steps_per_gen=settings['sim_length'],
-                        mutation_rate=settings['mutation_rate'],
-                        static_grid=current_map
-                    )
+                        width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=current_map,
+                        **settings)
                     game.target = current_target
                     step_counter = 0
 
@@ -141,48 +141,52 @@ def main():
         if current_state == GameState.EDITING:
             buttons = pygame.mouse.get_pressed()
             mx, my = pygame.mouse.get_pos()
-            grid_x, grid_y = mx // TILE_SIZE, my // TILE_SIZE
-
-            if 0 <= grid_x < GRID_WIDTH and 0 <= grid_y < GRID_HEIGHT:
-                if buttons[0]: # Left-click to draw
-                    game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
-                elif buttons[2]: # Right-click to erase
-                    game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
-                elif buttons[1]: # Middle-click to move target
-                    game.target = (grid_x, grid_y)
+            if game_world_rect.collidepoint(mx, my):
+                grid_x, grid_y = mx // TILE_SIZE, my // TILE_SIZE
+                if buttons[0]: game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
+                elif buttons[2]: game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
+                elif buttons[1]: game.target = (grid_x, grid_y)
 
         elif current_state == GameState.SIMULATING:
-            for _ in range(settings['sim_speed']):
+            time_since_last_step += time_delta
+            step_interval = 1.0 / settings['sps']
+            while time_since_last_step >= step_interval:
                 if step_counter < game.steps_per_generation:
-                    tasks = []
-                    for unit in game.units:
-                        brain_weights = [w.copy() for w in unit.brain.weights]
-                        brain_biases = [b.copy() for b in unit.brain.biases]
-                        tasks.append((
-                            unit.id, unit.x, unit.y,
-                            brain_weights, brain_biases,
-                            game.tile_map.static_grid,
-                            game.tile_map.dynamic_grid,
-                            game.target,
-                            game.mlp_arch,
-                            game.perception_radius
-                        ))
+                    tasks = [(u.id, u.x, u.y, [w.copy() for w in u.brain.weights], [b.copy() for b in u.brain.biases],
+                              game.tile_map.static_grid, game.target, game.mlp_arch, settings['vision_radius']) for u in game.units]
                     results = pool.map(process_unit_logic, tasks)
                     game.update_simulation_with_results(results)
                     step_counter += 1
+                    sps_counter += 1
                 else:
                     game.evolve_population()
                     step_counter = 0
-                    break
+                time_since_last_step -= step_interval
+
+        if sps_timer >= 1.0:
+            measured_sps, sps_counter, sps_timer = sps_counter, 0, 0
+
+        screen.fill(pygame.Color("#202020"))
+        draw_game_world(game_world_surface, game)
+        screen.blit(game_world_surface, game_world_rect.topleft)
+
+        live_activations = None
+        if game.fittest_brain and game.units:
+            fittest_unit = game.units[0]
+            vision_inputs = get_vision_inputs(fittest_unit.x, fittest_unit.y, game.tile_map.static_grid, settings['vision_radius'])
+            dx_to_target = (game.target[0] - fittest_unit.x) / game.tile_map.grid_width
+            dy_to_target = (game.target[1] - fittest_unit.y) / game.tile_map.grid_height
+            target_inputs = np.array([dx_to_target, dy_to_target])
+            inputs = np.concatenate((vision_inputs, target_inputs))
+            _, live_activations = game.fittest_brain.forward(inputs)
+        ui.draw_fittest_brain(visualizer_panel.image, game.fittest_brain, live_activations)
+
+        fps_text = font.render(f"FPS: {int(clock.get_fps())}", True, WHITE)
+        sps_text = font.render(f"SPS: {measured_sps}", True, WHITE)
+        screen.blit(fps_text, (10, 10))
+        screen.blit(sps_text, (10, 30))
 
         ui_manager.update(time_delta)
-
-        if game.fittest_brain:
-            ui.draw_fittest_brain(game.fittest_brain)
-
-        screen.fill(BLACK)
-        draw_tile_map(screen, game)
-        draw_dynamic_elements(screen, game, settings)
         ui_manager.draw_ui(screen)
         pygame.display.flip()
 
