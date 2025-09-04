@@ -179,7 +179,7 @@ def main():
             dy_to_target = (game.target[1] - fittest_unit.y) / game.tile_map.grid_height
             target_inputs = np.array([dx_to_target, dy_to_target])
             inputs = np.concatenate((vision_inputs, target_inputs))
-            _, live_activations = game.fittest_brain.forward(inputs)
+            _, live_activations = game.fittest_brain.forward(inputs, return_activations=True)
         ui.draw_fittest_brain(visualizer_panel.image, game.fittest_brain, live_activations)
 
         fps_text = font.render(f"FPS: {int(clock.get_fps())}", True, WHITE)

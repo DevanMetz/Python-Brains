@@ -70,8 +70,21 @@ if OPENCL_AVAILABLE:
             self.biases_gpu = None
             self.prg = None
 
-        def forward(self, inputs):
-            """Performs a forward pass using OpenCL if available."""
+        def forward(self, inputs, return_activations=False):
+            """
+            Performs a forward pass using OpenCL if available.
+
+            Args:
+                inputs (np.ndarray): The input vector for the network.
+                return_activations (bool): If True, returns all layer activations.
+                    This is slower as it requires more data transfer from the GPU.
+                    Defaults to False.
+
+            Returns:
+                tuple[np.ndarray, list[np.ndarray] or None]: A tuple containing:
+                    - The final output vector from the network.
+                    - A list of the activation arrays for each layer, or None.
+            """
             if not self.ctx: # Fallback to numpy if OpenCL is disabled
                 return super().forward(inputs)
 
@@ -81,7 +94,9 @@ if OPENCL_AVAILABLE:
                 inputs = inputs.reshape(1, -1)
 
             current_layer_output_gpu = cl_array.to_device(self.queue, inputs.astype(np.float32))
-            activations_gpu = [current_layer_output_gpu]
+
+            # Keep track of activations on the GPU only if needed
+            activations_gpu = [current_layer_output_gpu] if return_activations else None
 
             for i in range(len(self.weights_gpu)):
                 input_size = self.layer_sizes[i]
@@ -93,18 +108,21 @@ if OPENCL_AVAILABLE:
                                          (output_size,),
                                          None,
                                          current_layer_output_gpu.data,
-                                      self.weights_gpu[i].data,
-                                      self.biases_gpu[i].data,
-                                      output_gpu.data,
-                                      np.int32(input_size),
-                                      np.int32(output_size))
+                                         self.weights_gpu[i].data,
+                                         self.biases_gpu[i].data,
+                                         output_gpu.data,
+                                         np.int32(input_size),
+                                         np.int32(output_size))
 
                 current_layer_output_gpu = output_gpu
-                activations_gpu.append(current_layer_output_gpu)
+                if return_activations:
+                    activations_gpu.append(current_layer_output_gpu)
 
-            # Transfer final result and activations back to CPU
+            # Transfer final result back to CPU
             final_output = current_layer_output_gpu.get()
-            activations = [act.get() for act in activations_gpu]
+
+            # Transfer activations only if requested
+            activations = [act.get() for act in activations_gpu] if return_activations else None
 
             return final_output, activations
 
