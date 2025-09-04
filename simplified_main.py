@@ -39,6 +39,12 @@ def draw_game_world(surface, game):
             if game.tile_map.static_grid[x, y] == Tile.WALL.value:
                 rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
                 pygame.draw.rect(surface, WALL_COLOR, rect)
+
+    # Draw spawn point
+    spawn_center = (int(game.spawn_point[0] * TILE_SIZE + TILE_SIZE / 2),
+                    int(game.spawn_point[1] * TILE_SIZE + TILE_SIZE / 2))
+    pygame.draw.circle(surface, (0, 100, 200), spawn_center, TILE_SIZE / 2, 2)
+
     unit_surface = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
     unit_surface.fill((*UNIT_COLOR, 180))
     for unit in game.units:
@@ -118,10 +124,6 @@ def main():
     while running:
         time_delta = clock.tick(FPS) / 1000.0
 
-        # We get settings here, but they are only applied on button press
-        # If the UI is recreated, get_current_settings might fail if called before ui.update
-        # It's safer to get settings after processing events.
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -161,11 +163,17 @@ def main():
                 elif event.ui_element == ui.load_map_button:
                     loaded_map = load_map(SAVED_MAP_PATH)
                     if loaded_map is not None:
+                        current_settings = ui.get_current_settings()
+                        game_config = create_game_config_from_settings(current_settings)
+
+                        # Preserve spawn and target from old game instance
                         current_target = game.target
-                        settings = ui.get_current_settings()
-                        game_config = create_game_config_from_settings(settings)
+                        current_spawn = game.spawn_point
+
                         game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=loaded_map, **game_config)
+
                         game.target = current_target
+                        game.spawn_point = current_spawn
                         step_counter = 0
 
                 elif event.ui_element == ui.apply_button:
@@ -187,20 +195,33 @@ def main():
         ui_manager.update(time_delta)
         ui.update_labels()
 
-        # Get settings after events are processed
         settings = ui.get_current_settings()
+
+        if current_state == GameState.SIMULATING:
+            sps_timer += time_delta
 
         if current_state == GameState.EDITING:
             buttons = pygame.mouse.get_pressed()
+            keys = pygame.key.get_pressed()
             mx, my = pygame.mouse.get_pos()
+
             if game_world_rect.collidepoint(mx, my):
-                # Convert screen coordinates to game world surface coordinates
                 scaled_mx = mx * (game_world_surface.get_width() / game_world_rect.width)
                 scaled_my = my * (game_world_surface.get_height() / game_world_rect.height)
                 grid_x, grid_y = int(scaled_mx // TILE_SIZE), int(scaled_my // TILE_SIZE)
-                if buttons[0]: game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
-                elif buttons[2]: game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
-                elif buttons[1]: game.target = (grid_x, grid_y)
+
+                # Shift + Left Click to set spawn
+                if buttons[0] and (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]):
+                    game.spawn_point = (grid_x, grid_y)
+                # Left Click to draw wall
+                elif buttons[0]:
+                    game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
+                # Right Click to erase
+                elif buttons[2]:
+                    game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
+                # Middle Click to set target
+                elif buttons[1]:
+                    game.target = (grid_x, grid_y)
 
         elif current_state == GameState.FAST_FORWARDING:
             for _ in range(game.steps_per_generation):
@@ -227,11 +248,12 @@ def main():
                 time_since_last_step -= step_interval
 
         if sps_timer >= 1.0:
-            measured_sps, sps_counter, sps_timer = sps_counter, 0, 0
+            measured_sps = sps_counter
+            sps_counter = 0
+            sps_timer -= 1.0
 
         screen.fill(pygame.Color("#202020"))
 
-        # Draw game world to its own surface, then scale it to the screen
         draw_game_world(game_world_surface, game)
         screen.blit(pygame.transform.scale(game_world_surface, game_world_rect.size), game_world_rect.topleft)
 
@@ -241,15 +263,22 @@ def main():
             text_rect = text_surf.get_rect(center=screen.get_rect().center)
             screen.blit(text_surf, text_rect)
 
-        if game.fittest_brain:
-            inputs = game._get_unit_inputs(game.units[0])
+        if game.fittest_brain and game.units:
+            # We need a unit to get the inputs from, let's use the first one.
+            # Note: this unit's brain is not necessarily the same as fittest_brain
+            unit_for_vis = game.units[0]
+            inputs = game._get_unit_inputs(unit_for_vis)
             _, live_activations = game.fittest_brain.forward(inputs)
             ui.draw_fittest_brain(visualizer_panel.image, game.fittest_brain, live_activations)
 
         fps_text = font.render(f"FPS: {int(clock.get_fps())}", True, WHITE)
         sps_text = font.render(f"SPS: {measured_sps}", True, WHITE)
+        best_fitness_text = font.render(f"Best Fitness: {game.best_fitness:.4f}", True, WHITE)
+        avg_fitness_text = font.render(f"Avg Fitness: {game.average_fitness:.4f}", True, WHITE)
         screen.blit(fps_text, (10, 10))
         screen.blit(sps_text, (10, 30))
+        screen.blit(best_fitness_text, (10, 50))
+        screen.blit(avg_fitness_text, (10, 70))
 
         ui_manager.draw_ui(screen)
         pygame.display.flip()
