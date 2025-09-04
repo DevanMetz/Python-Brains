@@ -27,6 +27,7 @@ SAVED_MAP_PATH = os.path.join(MAPS_DIR, "saved_map.csv")
 BLACK, WHITE = (0, 0, 0), (255, 255, 255)
 GRID_COLOR, WALL_COLOR = (40, 40, 40), (100, 100, 100)
 UNIT_COLOR, TARGET_COLOR = (0, 150, 255), (0, 255, 0)
+RESOURCE_COLOR = (255, 180, 0)
 
 class GameState(Enum):
     SIMULATING, EDITING, PAUSED, FAST_FORWARDING = 1, 2, 3, 4
@@ -38,6 +39,10 @@ def draw_game_world(surface, game):
             if game.tile_map.is_wall(x, y):
                 rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
                 pygame.draw.rect(surface, WALL_COLOR, rect)
+            elif game.tile_map.is_resource(x, y):
+                rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+                pygame.draw.rect(surface, RESOURCE_COLOR, rect)
+
 
     spawn_center = (int(game.spawn_point[0] * TILE_SIZE + TILE_SIZE / 2),
                     int(game.spawn_point[1] * TILE_SIZE + TILE_SIZE / 2))
@@ -129,7 +134,10 @@ def main():
 
     ui_manager, ui, visualizer_panel, game_world_rect = setup_ui(SCREEN_WIDTH, SCREEN_HEIGHT)
     default_map = load_or_create_default_map()
-    game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=default_map)
+
+    initial_settings = ui.get_current_settings()
+    game_config = create_game_config_from_settings(initial_settings)
+    game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=default_map, **game_config)
 
     step_counter, measured_sps, sps_counter, sps_timer, time_since_last_step = 0, 0, 0, 0.0, 0.0
     ff_generations_to_run, ff_generations_completed = 0, 0
@@ -163,7 +171,7 @@ def main():
                     loaded_map = load_map(SAVED_MAP_PATH)
                     if loaded_map is not None:
                         game_config = create_game_config_from_settings(settings)
-                        game = SimplifiedGame(static_grid=loaded_map, **game_config)
+                        game = SimplifiedGame(width=loaded_map.shape[0], height=loaded_map.shape[1], static_grid=loaded_map, **game_config)
                         step_counter = 0
                 elif event.ui_element == ui.apply_button:
                     game.update_settings(create_game_config_from_settings(settings))
@@ -177,7 +185,7 @@ def main():
 
         ui_manager.update(time_delta)
         settings = ui.get_current_settings()
-        ui.update_labels()
+        ui.update_labels(game.bank)
 
         if current_state == GameState.SIMULATING:
             sps_timer += time_delta
