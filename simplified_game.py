@@ -104,6 +104,7 @@ class SimplifiedGame:
         self.penalty_damage = penalty_damage
         self.penalty_idle = penalty_idle
         self.penalty_full_idle = penalty_full_idle
+        self.reward_progress_to_dropoff = reward_progress_to_dropoff
 
         self._setup_mlp_arch(mlp_arch_str)
         self._initialize_map_objects()
