@@ -151,6 +151,8 @@ def main():
 
     while running:
         time_delta = clock.tick(FPS) / 1000.0
+        # Cap time_delta to prevent the simulation from trying to catch up too much at once
+        time_delta = min(time_delta, 0.1)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT: running = False
@@ -201,7 +203,7 @@ def main():
             sps_timer += time_delta
             time_since_last_step += time_delta
             step_interval = 1.0 / settings['sps'] if settings['sps'] > 0 else 0
-            if time_since_last_step >= step_interval:
+            while time_since_last_step >= step_interval:
                 if step_counter < settings['sim_length']:
                     game.run_simulation_step()
                     step_counter += 1; sps_counter += 1
