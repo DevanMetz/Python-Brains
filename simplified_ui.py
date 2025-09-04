@@ -70,7 +70,7 @@ class SimplifiedUI:
         y_pos = create_slider('sps', 'Steps Per Second:', y_pos, 1, 1000, 60, '{}')
         y_pos = create_slider('sim_length', 'Sim Length:', y_pos, 50, 1000, 100, '{}')
         y_pos = create_slider('population_size', 'Population:', y_pos, 10, 500, 100, '{}')
-        y_pos = create_slider('mutation_rate', 'Mutation Rate:', y_pos, 0, 0.2, 0.05, '{:.2f}')
+        y_pos = create_slider('mutation_rate', 'Mutation Rate:', y_pos, 0, 1.0, 0.05, '{:.2f}')
         y_pos = create_slider('attack_awareness_radius', 'Attack Awareness:', y_pos, 1, 10, 2, '{}')
         y_pos += 40
 
