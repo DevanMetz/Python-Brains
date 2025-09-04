@@ -62,33 +62,43 @@ class SimplifiedUI:
         y_pos = create_slider('sim_length', 'Sim Length:', y_pos, 50, 1000, 100, '{}')
         y_pos = create_slider('population_size', 'Population:', y_pos, 10, 500, 100, '{}')
         y_pos = create_slider('mutation_rate', 'Mutation Rate:', y_pos, 0, 0.2, 0.05, '{:.2f}')
-        y_pos = create_slider('exploration_bonus', 'Exploration Bonus:', y_pos, 0, 0.1, 0.0, '{:.3f}')
-        y_pos += 10
 
-        # --- Reward Function UI ---
+        y_pos += 10
         pygame_gui.elements.UILabel(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
-            text='Proximity Reward:', manager=manager, container=self.controls_panel)
+            text='--- Reward Settings ---', manager=manager, container=self.controls_panel)
+        y_pos += 30
+
+        y_pos = create_slider('proximity_bonus', 'Proximity Bonus:', y_pos, 0, 1.0, 1.0, '{:.2f}')
+        y_pos = create_slider('exploration_bonus', 'Exploration Bonus:', y_pos, 0, 1.0, 0.0, '{:.2f}')
+
+        pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
+            text='Proximity Function:', manager=manager, container=self.controls_panel)
         y_pos += 25
-        prox_options = ['Inverse Squared', 'Inverse', 'Exponential', 'Logarithmic']
+        prox_options = ['None', 'Inverse Squared', 'Inverse', 'Exponential', 'Logarithmic']
         self.dropdowns['proximity_func'] = pygame_gui.elements.UIDropDownMenu(
-            options_list=prox_options, starting_option=prox_options[0],
+            options_list=prox_options, starting_option=prox_options[1],
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
             manager=manager, container=self.controls_panel)
         y_pos += 40
 
         pygame_gui.elements.UILabel(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
-            text='Exploration Reward:', manager=manager, container=self.controls_panel)
+            text='Exploration Function:', manager=manager, container=self.controls_panel)
         y_pos += 25
-        expl_options = ['Linear', 'Square Root']
+        expl_options = ['None', 'Linear', 'Square Root']
         self.dropdowns['exploration_func'] = pygame_gui.elements.UIDropDownMenu(
-            options_list=expl_options, starting_option=expl_options[0],
+            options_list=expl_options, starting_option=expl_options[1],
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
             manager=manager, container=self.controls_panel)
         y_pos += 50
 
-        # --- Other controls ---
+        pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
+            text='--- Other Settings ---', manager=manager, container=self.controls_panel)
+        y_pos += 30
+
         pygame_gui.elements.UILabel(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
             text='MLP Hidden Layers:', manager=manager, container=self.controls_panel)

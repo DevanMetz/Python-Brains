@@ -33,13 +33,16 @@ class SimplifiedUnit:
         self.last_action = Action.STAY
 
     def clone(self):
-        return SimplifiedUnit(self.id, self.x, self.y, self.brain.clone())
+        cloned = SimplifiedUnit(self.id, self.x, self.y, self.brain.clone())
+        cloned.last_action = self.last_action
+        return cloned
 
 class SimplifiedGame:
     def __init__(self, width=40, height=30, population_size=100, mlp_arch_str="16",
                  perception_radius=5, steps_per_gen=100, mutation_rate=0.05,
-                 exploration_bonus=0.0, proximity_func='Inverse Squared',
-                 exploration_func='Linear', static_grid=None):
+                 proximity_bonus=1.0, exploration_bonus=0.0,
+                 proximity_func='Inverse Squared', exploration_func='Linear',
+                 static_grid=None):
         self.tile_map = TileMap(width, height, static_grid)
         self.units = []
         self.target = (width - 5, height // 2)
@@ -50,10 +53,13 @@ class SimplifiedGame:
         self.batch_processor = None
         self.best_fitness = 0.0
         self.average_fitness = 0.0
+        self.best_fitness_components = (0.0, 0.0) # (proximity, exploration)
+        self.fitness_history = []
 
         self.perception_radius = perception_radius
         self.steps_per_generation = steps_per_gen
         self.mutation_rate = mutation_rate
+        self.proximity_bonus = proximity_bonus
         self.exploration_bonus = exploration_bonus
         self.proximity_func = proximity_func
         self.exploration_func = exploration_func
@@ -89,6 +95,10 @@ class SimplifiedGame:
     def restart(self):
         self.generation = 0
         self.fittest_brain = None
+        self.best_fitness = 0.0
+        self.average_fitness = 0.0
+        self.best_fitness_components = (0.0, 0.0)
+        self.fitness_history = []
         self._initialize_population()
         print("Simulation restarted.")
 
@@ -104,10 +114,9 @@ class SimplifiedGame:
             self._initialize_population()
             print("MLP architecture or population size changed. Population reset.")
         elif pop_changed:
-            start_x, start_y = self.spawn_point
             if new_pop_size > self.population_size:
                 for i in range(self.population_size, new_pop_size):
-                    self.units.append(SimplifiedUnit(i, start_x, start_y, MLP(self.mlp_arch)))
+                    self.units.append(SimplifiedUnit(i, self.spawn_point[0], self.spawn_point[1], MLP(self.mlp_arch)))
             else:
                 self.units = self.units[:new_pop_size]
             self.population_size = new_pop_size
@@ -116,6 +125,7 @@ class SimplifiedGame:
         self.perception_radius = int(settings.get('perception_radius', self.perception_radius))
         self.steps_per_generation = int(settings.get('steps_per_gen', self.steps_per_generation))
         self.mutation_rate = float(settings.get('mutation_rate', self.mutation_rate))
+        self.proximity_bonus = float(settings.get('proximity_bonus', self.proximity_bonus))
         self.exploration_bonus = float(settings.get('exploration_bonus', self.exploration_bonus))
         self.proximity_func = settings.get('proximity_func', self.proximity_func)
         self.exploration_func = settings.get('exploration_func', self.exploration_func)
@@ -149,7 +159,7 @@ class SimplifiedGame:
         self._update_units_from_results(results)
 
     def _get_unit_inputs(self, unit):
-        vision = get_vision_inputs(unit.x, unit.y, self.tile_map)
+        vision = get_vision_inputs(unit.x, unit.y, self.tile_map, self.perception_radius)
         dx_norm = (self.target[0] - unit.x) / self.tile_map.grid_width
         dy_norm = (self.target[1] - unit.y) / self.tile_map.grid_height
         target_vector = np.array([dx_norm, dy_norm])
@@ -165,22 +175,34 @@ class SimplifiedGame:
                 self.units[unit_id].visited_tiles.add((new_x, new_y))
 
     def evolve_population(self):
-        fitness_scores = [self._calculate_fitness(u) for u in self.units]
-        self.best_fitness, self.average_fitness = np.max(fitness_scores), np.mean(fitness_scores)
+        all_fitness_data = [self._calculate_fitness(u) for u in self.units]
+        fitness_scores = [f[0] for f in all_fitness_data]
+
+        self.best_fitness = np.max(fitness_scores)
+        self.average_fitness = np.mean(fitness_scores)
+        self.fitness_history.append(self.best_fitness)
+
         sorted_indices = np.argsort(fitness_scores)[::-1]
+        best_unit_index = sorted_indices[0]
+
+        self.fittest_brain = self.units[best_unit_index].brain.clone()
+        self.best_fitness_components = (all_fitness_data[best_unit_index][1], all_fitness_data[best_unit_index][2])
+
         sorted_units = [self.units[i] for i in sorted_indices]
-        self.fittest_brain = sorted_units[0].brain.clone()
         num_elites = self.population_size // 10
+
         next_gen_units = [u.clone() for u in sorted_units[:num_elites]]
         for unit in next_gen_units:
             unit.x, unit.y = self.spawn_point
             unit.visited_tiles = set([self.spawn_point])
+
         elite_pool = sorted_units[:num_elites] if num_elites > 0 else [sorted_units[0]]
         while len(next_gen_units) < self.population_size:
             parent = np.random.choice(elite_pool)
             child_brain = parent.brain.clone()
             child_brain.mutate(self.mutation_rate, 0.1)
             next_gen_units.append(SimplifiedUnit(len(next_gen_units), self.spawn_point[0], self.spawn_point[1], child_brain))
+
         self.units = next_gen_units
         for i, unit in enumerate(self.units):
             unit.id = i
@@ -189,32 +211,38 @@ class SimplifiedGame:
 
     def _calculate_fitness(self, unit):
         # Proximity component
-        dist_sq = (unit.x - self.target[0])**2 + (unit.y - self.target[1])**2
-        if self.proximity_func == 'Inverse':
-            proximity_score = 1.0 / (np.sqrt(dist_sq) + 1.0)
-        elif self.proximity_func == 'Exponential':
-            proximity_score = np.exp(-0.1 * np.sqrt(dist_sq))
-        elif self.proximity_func == 'Logarithmic':
-            proximity_score = 1.0 / (np.log(dist_sq + 1) + 1)
-        else: # Inverse Squared (default)
-            proximity_score = 1.0 / (dist_sq + 1.0)
+        if self.proximity_func == 'None':
+            proximity_score = 0.0
+        else:
+            dist_sq = (unit.x - self.target[0])**2 + (unit.y - self.target[1])**2
+            if self.proximity_func == 'Inverse':
+                proximity_score = 1.0 / (np.sqrt(dist_sq) + 1.0)
+            elif self.proximity_func == 'Exponential':
+                proximity_score = np.exp(-0.1 * np.sqrt(dist_sq))
+            elif self.proximity_func == 'Logarithmic':
+                proximity_score = 1.0 / (np.log(dist_sq + 1) + 1)
+            else: # Inverse Squared (default)
+                proximity_score = 1.0 / (dist_sq + 1.0)
 
         # Exploration component
-        visited_count = len(unit.visited_tiles)
-        if self.exploration_func == 'Square Root':
-            exploration_score = np.sqrt(visited_count)
-        else: # Linear (default)
-            exploration_score = visited_count
+        if self.exploration_func == 'None':
+            exploration_score = 0.0
+        else:
+            visited_count = len(unit.visited_tiles)
+            if self.exploration_func == 'Square Root':
+                exploration_score = np.sqrt(visited_count)
+            else: # Linear (default)
+                exploration_score = float(visited_count)
 
-        return proximity_score + self.exploration_bonus * exploration_score
+        total_fitness = (self.proximity_bonus * proximity_score) + (self.exploration_bonus * exploration_score)
+        return total_fitness, proximity_score, exploration_score
 
 def get_vision_inputs(start_x, start_y, tile_map, vision_range=5):
     directions = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)]
     vision = np.zeros(8)
     for i, (dx, dy) in enumerate(directions):
         for dist in range(1, vision_range + 1):
-            check_x, check_y = start_x + dx * dist, start_y + dy * dist
-            if tile_map.is_wall(check_x, check_y):
+            if tile_map.is_wall(start_x + dx * dist, start_y + dy * dist):
                 vision[i] = dist / vision_range
                 break
         else:
