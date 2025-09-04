@@ -26,7 +26,10 @@ SAVED_MAP_PATH = os.path.join(MAPS_DIR, "saved_map.csv")
 # --- Colors ---
 BLACK, WHITE = (0, 0, 0), (255, 255, 255)
 GRID_COLOR, WALL_COLOR = (40, 40, 40), (100, 100, 100)
-UNIT_COLOR, TARGET_COLOR = (0, 150, 255), (0, 255, 0)
+UNIT_COLOR, TARGET_COLOR = (0, 150, 255), (0, 255, 0) # Target color will be repurposed for dropoff
+RESOURCE_COLOR = (0, 200, 50) # Green
+DROPOFF_COLOR = (255, 200, 0) # Yellow/Orange
+ENEMY_COLOR = (200, 50, 50) # Red
 
 class GameState(Enum):
     SIMULATING, EDITING, PAUSED, FAST_FORWARDING = 1, 2, 3, 4
@@ -35,9 +38,18 @@ def draw_game_world(surface, game):
     surface.fill(BLACK)
     for x in range(game.tile_map.grid_width):
         for y in range(game.tile_map.grid_height):
-            if game.tile_map.is_wall(x, y):
-                rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+            tile_val = game.tile_map.static_grid[x, y]
+            rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+            if tile_val == Tile.WALL.value:
                 pygame.draw.rect(surface, WALL_COLOR, rect)
+            elif tile_val == Tile.RESOURCE.value:
+                pygame.draw.rect(surface, RESOURCE_COLOR, rect)
+            elif tile_val == Tile.DROPOFF.value:
+                pygame.draw.rect(surface, DROPOFF_COLOR, rect)
+
+    for enemy in game.enemies:
+        rect = pygame.Rect(enemy.x * TILE_SIZE, enemy.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+        pygame.draw.circle(surface, ENEMY_COLOR, rect.center, TILE_SIZE * 0.4)
 
     spawn_center = (int(game.spawn_point[0] * TILE_SIZE + TILE_SIZE / 2),
                     int(game.spawn_point[1] * TILE_SIZE + TILE_SIZE / 2))
@@ -135,13 +147,22 @@ def main():
     ff_generations_to_run, ff_generations_completed = 0, 0
     current_state = GameState.SIMULATING
     running = True
+    editing_brush_tile = Tile.WALL
 
     while running:
         time_delta = clock.tick(FPS) / 1000.0
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT: running = False
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE: running = False
+                if current_state == GameState.EDITING:
+                    if event.key == pygame.K_1: editing_brush_tile = Tile.WALL
+                    elif event.key == pygame.K_2: editing_brush_tile = Tile.RESOURCE
+                    elif event.key == pygame.K_3: editing_brush_tile = Tile.DROPOFF
+                    elif event.key == pygame.K_4: editing_brush_tile = Tile.ENEMY
+                    elif event.key == pygame.K_0: editing_brush_tile = Tile.EMPTY
+
 
             if event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
@@ -196,10 +217,12 @@ def main():
             if game_world_rect.collidepoint(mx, my):
                 scaled_mx, scaled_my = mx * (game_world_surface.get_width() / game_world_rect.width), my * (game_world_surface.get_height() / game_world_rect.height)
                 grid_x, grid_y = int(scaled_mx // TILE_SIZE), int(scaled_my // TILE_SIZE)
-                if buttons[0] and (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]): game.spawn_point = (grid_x, grid_y)
-                elif buttons[0]: game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
-                elif buttons[2]: game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
-                elif buttons[1]: game.target = (grid_x, grid_y)
+                if buttons[0] and (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]):
+                    game.spawn_point = (grid_x, grid_y)
+                elif buttons[0]: # Left-click draws with the selected brush
+                    game.tile_map.set_tile(grid_x, grid_y, editing_brush_tile)
+                elif buttons[2]: # Right-click erases
+                    game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
 
         elif current_state == GameState.FAST_FORWARDING:
             for _ in range(settings['sim_length']): game.run_simulation_step()

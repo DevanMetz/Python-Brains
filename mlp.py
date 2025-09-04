@@ -68,12 +68,23 @@ class MLP:
         """
         return np.tanh(x)
 
+    @staticmethod
+    def _softmax(x):
+        """The softmax activation function.
+
+        Used for the output layer to convert raw scores (logits) into a
+        probability distribution.
+        """
+        # Subtract max for numerical stability
+        e_x = np.exp(x - np.max(x, axis=1, keepdims=True))
+        return e_x / e_x.sum(axis=1, keepdims=True)
+
     def forward(self, inputs):
         """Performs a forward pass, returning final output and all activations.
 
-        The input is propagated through each layer of the network. At each
-        layer, a linear transformation (dot product with weights plus bias)
-        is followed by the application of the tanh activation function.
+        The input is propagated through each layer of the network. Hidden
+        layers use the tanh activation function, while the final output layer
+        uses softmax to produce a probability distribution over actions.
 
         Args:
             inputs (np.ndarray): The input vector for the network. It should
@@ -82,14 +93,12 @@ class MLP:
 
         Returns:
             tuple[np.ndarray, list[np.ndarray]]: A tuple containing:
-                - The final output vector from the network.
-                - A list of the activation arrays for each layer, including
-                  the input layer.
+                - The final output vector (probabilities) from the network.
+                - A list of the activation arrays for each layer.
         """
         if not isinstance(inputs, np.ndarray):
             inputs = np.array(inputs)
 
-        # Ensure input is a 2D array (batch of 1)
         if inputs.ndim == 1:
             inputs = inputs.reshape(1, -1)
 
@@ -97,11 +106,14 @@ class MLP:
         current_layer_output = inputs
 
         for i in range(len(self.weights)):
-            # Linear transformation
             z = np.dot(current_layer_output, self.weights[i]) + self.biases[i]
 
-            # Apply activation function for all layers
-            current_layer_output = self._tanh(z)
+            # Apply softmax to the last layer, tanh to hidden layers
+            if i == len(self.weights) - 1:
+                current_layer_output = self._softmax(z)
+            else:
+                current_layer_output = self._tanh(z)
+
             activations.append(current_layer_output)
 
         return current_layer_output, activations
