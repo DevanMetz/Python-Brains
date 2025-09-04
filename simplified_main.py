@@ -253,8 +253,7 @@ def main():
         y_offset = 10
         texts = [f"FPS: {int(clock.get_fps())}", f"SPS: {measured_sps}", f"Generation: {game.generation}",
                  f"Best Fitness: {game.best_fitness:.4f}", f"Avg Fitness: {game.average_fitness:.4f}"]
-        prox, expl = game.best_fitness_components
-        texts.extend([f"  - Proximity: {prox:.4f}", f"  - Exploration: {expl:.4f}"])
+        texts.extend([f"  - Collected: {game.best_unit_collected}", f"  - Deposited: {game.best_unit_deposited}"])
         for text in texts:
             screen.blit(font.render(text, True, WHITE), (10, y_offset))
             y_offset += 20

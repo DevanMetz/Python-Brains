@@ -52,6 +52,8 @@ class SimplifiedUnit:
         # Fitness tracking
         self.fitness_score = 0.0
         self.is_dead = False
+        self.resources_collected = 0
+        self.resources_deposited = 0
 
     def clone(self):
         # When a unit is cloned for the next generation, it gets a fresh brain
@@ -84,6 +86,8 @@ class SimplifiedGame:
         self.best_fitness = 0.0
         self.average_fitness = 0.0
         self.best_fitness_components = (0.0, 0.0)
+        self.best_unit_collected = 0
+        self.best_unit_deposited = 0
         self.fitness_history = []
 
         self.perception_radius = perception_radius
@@ -154,6 +158,8 @@ class SimplifiedGame:
         self.best_fitness = 0.0
         self.average_fitness = 0.0
         self.best_fitness_components = (0.0, 0.0)
+        self.best_unit_collected = 0
+        self.best_unit_deposited = 0
         self.fitness_history = []
         self._initialize_map_objects()
         self._initialize_population()
@@ -217,6 +223,10 @@ class SimplifiedGame:
             action = unit.last_action
             unit_pos = (unit.x, unit.y)
 
+            # Add penalty for not returning to base when cargo is full
+            if unit.cargo == unit.max_cargo and action != Action.MOVE_TO_DROPOFF:
+                unit.fitness_score -= 1
+
             # Movement actions
             if action == Action.MOVE_TO_RESOURCE:
                 if not unit.is_carrying: unit.fitness_score += 1 # Reward for correct intention
@@ -254,6 +264,7 @@ class SimplifiedGame:
                 _, dist = self._find_nearest_object(unit_pos, self.resource_locations)
                 if dist <= 1 and unit.cargo < unit.max_cargo:
                     unit.cargo += 1
+                    unit.resources_collected += 1
                     unit.is_carrying = True
                     unit.fitness_score += 5 # Reward for successful gather
                 else:
@@ -298,8 +309,9 @@ class SimplifiedGame:
                 if dist_to_dropoff <= 1: # If at a dropoff point
                     if unit.cargo == unit.max_cargo:
                         unit.fitness_score += 100 # Large reward for full delivery
-                    # Reset cargo after any delivery
-                    unit.cargo = 0
+
+                    unit.resources_deposited += unit.cargo
+                    unit.cargo = 0 # Reset cargo after any delivery
                     unit.is_carrying = False
 
 
@@ -399,9 +411,12 @@ class SimplifiedGame:
 
         sorted_indices = np.argsort(fitness_scores)[::-1]
         best_unit_index = sorted_indices[0]
+        fittest_unit = self.units[best_unit_index]
 
-        self.fittest_brain = self.units[best_unit_index].brain.clone()
+        self.fittest_brain = fittest_unit.brain.clone()
         self.best_fitness_components = (all_fitness_data[best_unit_index][1], all_fitness_data[best_unit_index][2])
+        self.best_unit_collected = fittest_unit.resources_collected
+        self.best_unit_deposited = fittest_unit.resources_deposited
 
         sorted_units = [self.units[i] for i in sorted_indices]
         num_elites = self.population_size // 10
