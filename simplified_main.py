@@ -131,7 +131,7 @@ def main():
     default_map = load_or_create_default_map()
     game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=default_map)
 
-    step_counter, measured_sps, sps_counter, sps_timer = 0, 0, 0, 0.0
+    step_counter, measured_sps, sps_counter, sps_timer, time_since_last_step = 0, 0, 0, 0.0, 0.0
     ff_generations_to_run, ff_generations_completed = 0, 0
     current_state = GameState.SIMULATING
     running = True
