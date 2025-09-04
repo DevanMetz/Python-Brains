@@ -69,7 +69,7 @@ class SimplifiedUI:
         y_pos += 40
         self.apply_button = pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 20, 30)),
-            text='Apply & Restart', manager=manager, container=self.controls_panel)
+            text='Apply Settings', manager=manager, container=self.controls_panel)
 
     def get_current_settings(self):
         settings = {name: slider.get_current_value() for name, slider in self.sliders.items()}

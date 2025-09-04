@@ -105,9 +105,6 @@ def main():
     current_state = GameState.SIMULATING
     time_since_last_step, sps_counter, sps_timer, measured_sps = 0, 0, 0, 0
 
-    multiprocessing.set_start_method("spawn", force=True)
-    pool = multiprocessing.Pool(multiprocessing.cpu_count())
-
     running = True
     while running:
         time_delta = clock.tick(FPS) / 1000.0
@@ -137,13 +134,9 @@ def main():
                         step_counter = 0
 
                 elif event.ui_element == ui.apply_button:
-                    current_map = game.tile_map.static_grid.copy()
-                    current_target = game.target
                     game_config = create_game_config_from_settings(settings)
-                    game = SimplifiedGame(
-                        width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=current_map,
-                        **game_config)
-                    game.target = current_target
+                    game.update_settings(game_config)
+                    # Reset step counter to apply changes to a fresh generation
                     step_counter = 0
 
             ui_manager.process_events(event)
@@ -164,10 +157,7 @@ def main():
             step_interval = 1.0 / settings['sps']
             while time_since_last_step >= step_interval:
                 if step_counter < game.steps_per_generation:
-                    tasks = [(u.id, u.x, u.y, [w.copy() for w in u.brain.weights], [b.copy() for b in u.brain.biases],
-                              game.tile_map.static_grid, game.target, game.mlp_arch, settings['vision_radius']) for u in game.units]
-                    results = pool.map(process_unit_logic, tasks)
-                    game.update_simulation_with_results(results)
+                    game.run_simulation_step()
                     step_counter += 1
                     sps_counter += 1
                 else:
@@ -202,8 +192,6 @@ def main():
         ui_manager.draw_ui(screen)
         pygame.display.flip()
 
-    pool.close()
-    pool.join()
     pygame.quit()
 
 if __name__ == '__main__':

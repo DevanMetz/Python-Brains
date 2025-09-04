@@ -5,6 +5,7 @@ It is designed to be independent of Pygame for easier testing and multiprocessin
 import numpy as np
 from enum import Enum
 from mlp import MLP
+from mlp_opencl import MLPOpenCL, OPENCL_AVAILABLE
 
 # --- Enums ---
 class Tile(Enum):
@@ -69,6 +70,11 @@ class SimplifiedGame:
                  perception_radius=5, steps_per_gen=100, mutation_rate=0.05,
                  exploration_bonus=0.0, static_grid=None):
         self.tile_map = TileMap(width, height, static_grid)
+        self.mlp_class = MLPOpenCL
+        if OPENCL_AVAILABLE:
+            print("OpenCL is available. Using MLPOpenCL.")
+        else:
+            print("OpenCL not available. Using standard MLP.")
         self.units = []
         self.target = (width - 5, height // 2)
         self.population_size = population_size
@@ -79,6 +85,7 @@ class SimplifiedGame:
         self.steps_per_generation = steps_per_gen
         self.mutation_rate = mutation_rate
         self.exploration_bonus = exploration_bonus
+        self.mlp_arch_str = mlp_arch_str
 
         try:
             hidden_layers = [int(n.strip()) for n in mlp_arch_str.split(',') if n.strip()]
@@ -95,7 +102,7 @@ class SimplifiedGame:
         self.units = []
         start_x, start_y = 5, self.tile_map.grid_height // 2
         for i in range(self.population_size):
-            self.units.append(SimplifiedUnit(i, start_x, start_y, MLP(self.mlp_arch)))
+            self.units.append(SimplifiedUnit(i, start_x, start_y, self.mlp_class(self.mlp_arch, verbose=True)))
         self.tile_map.update_dynamic_grid(self.units, self.target)
 
     def _create_walls(self):
@@ -104,6 +111,45 @@ class SimplifiedGame:
         if self.tile_map.grid_width > 25:
             for x in range(25, self.tile_map.grid_width - 5): self.tile_map.set_tile(x, 10, Tile.WALL)
 
+    def update_settings(self, settings):
+        """Updates simulation parameters dynamically."""
+        # Check for MLP architecture change, which requires a population reset
+        new_mlp_arch_str = settings.get('mlp_arch_str', self.mlp_arch_str)
+        if new_mlp_arch_str != self.mlp_arch_str:
+            self.mlp_arch_str = new_mlp_arch_str
+            try:
+                hidden_layers = [int(n.strip()) for n in self.mlp_arch_str.split(',') if n.strip()]
+            except ValueError:
+                hidden_layers = [16]
+            num_inputs = 10
+            num_outputs = len(Action)
+            self.mlp_arch = [num_inputs] + hidden_layers + [num_outputs]
+            self._initialize_population()
+            print("MLP architecture changed. Population reset.")
+
+        # Update other parameters
+        self.perception_radius = int(settings.get('perception_radius', self.perception_radius))
+        self.steps_per_generation = int(settings.get('steps_per_gen', self.steps_per_generation))
+        self.mutation_rate = float(settings.get('mutation_rate', self.mutation_rate))
+        self.exploration_bonus = float(settings.get('exploration_bonus', self.exploration_bonus))
+
+        # Handle population size change
+        new_pop_size = int(settings.get('population_size', self.population_size))
+        if new_pop_size != self.population_size:
+            start_x, start_y = 5, self.tile_map.grid_height // 2
+            if new_pop_size > self.population_size:
+                # Add new units
+                for i in range(len(self.units), new_pop_size):
+                    self.units.append(SimplifiedUnit(i, start_x, start_y, self.mlp_class(self.mlp_arch)))
+            else:
+                # Remove units
+                self.units = self.units[:new_pop_size]
+            self.population_size = new_pop_size
+            # Re-index units
+            for i, unit in enumerate(self.units):
+                unit.id = i
+            print(f"Population size changed to {self.population_size}.")
+
     def update_simulation_with_results(self, results):
         for unit_id, new_x, new_y in results:
             if unit_id < len(self.units):
@@ -111,6 +157,34 @@ class SimplifiedGame:
                 unit.x, unit.y = new_x, new_y
                 unit.visited_tiles.add((new_x, new_y))
         self.tile_map.update_dynamic_grid(self.units, self.target)
+
+    def run_simulation_step(self):
+        """
+        Processes the logic for all units for a single step of the simulation.
+        This replaces the multiprocessing logic and runs sequentially, but will
+        leverage the GPU for MLP forward passes if available.
+        """
+        if not self.units:
+            return
+
+        results = []
+        for unit in self.units:
+            # Get inputs for the MLP
+            vision_inputs = get_vision_inputs(unit.x, unit.y, self.tile_map.static_grid, self.perception_radius)
+            dx_to_target = (self.target[0] - unit.x) / self.tile_map.grid_width
+            dy_to_target = (self.target[1] - unit.y) / self.tile_map.grid_height
+            target_inputs = np.array([dx_to_target, dy_to_target])
+            inputs = np.concatenate((vision_inputs, target_inputs))
+
+            # Get action from the MLP
+            action_probs, _ = unit.brain.forward(inputs)
+            action = Action(np.argmax(action_probs))
+
+            # Determine new position based on action
+            final_x, final_y = determine_new_position(unit.x, unit.y, action, self.tile_map.static_grid)
+            results.append((unit.id, final_x, final_y))
+
+        self.update_simulation_with_results(results)
 
     def evolve_population(self):
         fitness_scores = []
@@ -179,17 +253,3 @@ def determine_new_position(unit_x, unit_y, action, static_grid):
         if static_grid[new_x, new_y] != Tile.WALL.value:
             final_x, final_y = new_x, new_y
     return final_x, final_y
-
-def process_unit_logic(args):
-    unit_id, unit_x, unit_y, brain_weights, brain_biases, static_grid, target_pos, mlp_arch, perception_radius = args
-    brain = MLP(mlp_arch)
-    brain.weights, brain.biases = brain_weights, brain_biases
-    vision_inputs = get_vision_inputs(unit_x, unit_y, static_grid, perception_radius)
-    dx_to_target = (target_pos[0] - unit_x) / static_grid.shape[0]
-    dy_to_target = (target_pos[1] - unit_y) / static_grid.shape[1]
-    target_inputs = np.array([dx_to_target, dy_to_target])
-    inputs = np.concatenate((vision_inputs, target_inputs))
-    action_probs, _ = brain.forward(inputs)
-    action = Action(np.argmax(action_probs))
-    final_x, final_y = determine_new_position(unit_x, unit_y, action, static_grid)
-    return (unit_id, final_x, final_y)
