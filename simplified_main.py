@@ -101,7 +101,7 @@ def draw_fitness_graph(surface, history, font):
 
 def save_map(game, filepath):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    np.savetxt(game.tile_map.static_grid, filepath, delimiter=',', fmt='%d')
+    np.savetxt(filepath, game.tile_map.static_grid, delimiter=',', fmt='%d')
     print(f"Map saved to {filepath}")
 
 def load_map(filepath):
