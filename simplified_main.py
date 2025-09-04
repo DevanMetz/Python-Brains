@@ -4,12 +4,11 @@ It uses Pygame for visualization and multiprocessing for parallel simulation.
 """
 import pygame
 import pygame_gui
-import multiprocessing
 import numpy as np
 import time
 import os
 from enum import Enum
-from simplified_game import SimplifiedGame, Tile, process_unit_logic, get_vision_inputs
+from simplified_game import SimplifiedGame, Tile, get_vision_inputs
 from simplified_ui import SimplifiedUI
 
 # --- Constants ---
