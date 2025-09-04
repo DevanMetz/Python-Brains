@@ -156,12 +156,6 @@ def main():
             if event.type == pygame.QUIT: running = False
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE: running = False
-                if current_state == GameState.EDITING:
-                    if event.key == pygame.K_1: editing_brush_tile = Tile.WALL
-                    elif event.key == pygame.K_2: editing_brush_tile = Tile.RESOURCE
-                    elif event.key == pygame.K_3: editing_brush_tile = Tile.DROPOFF
-                    elif event.key == pygame.K_4: editing_brush_tile = Tile.ENEMY
-                    elif event.key == pygame.K_0: editing_brush_tile = Tile.EMPTY
 
 
             if event.type == pygame.VIDEORESIZE:
@@ -169,6 +163,9 @@ def main():
                 ui_manager, ui, visualizer_panel, game_world_rect = setup_ui(event.w, event.h)
 
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                if event.ui_element in ui.brush_map:
+                    editing_brush_tile = ui.brush_map[event.ui_element]
+
                 settings = ui.get_current_settings()
                 if event.ui_element == ui.mode_button:
                     current_state = GameState.SIMULATING if current_state == GameState.EDITING else GameState.EDITING
