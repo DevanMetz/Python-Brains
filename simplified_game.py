@@ -224,12 +224,14 @@ class SimplifiedGame:
                 if target_pos and (unit.goal_type != 'resource' or unit.goal_pos != target_pos):
                     unit.goal_type, unit.goal_pos = 'resource', target_pos
                     unit.current_path = find_path(self.tile_map, unit_pos, target_pos)
+                    if unit.current_path: unit.current_path.pop(0) # Remove current position
             elif action == Action.MOVE_TO_DROPOFF:
                 if unit.is_carrying: unit.fitness_score += 1 # Reward for correct intention
                 target_pos, _ = self._find_nearest_object(unit_pos, self.dropoff_locations)
                 if target_pos and (unit.goal_type != 'dropoff' or unit.goal_pos != target_pos):
                     unit.goal_type, unit.goal_pos = 'dropoff', target_pos
                     unit.current_path = find_path(self.tile_map, unit_pos, target_pos)
+                    if unit.current_path: unit.current_path.pop(0) # Remove current position
             elif action == Action.FLEE:
                 unit.goal_type, unit.goal_pos = 'flee', None
                 enemy_pos, _ = self._find_nearest_object(unit_pos, self.enemies)
@@ -243,6 +245,7 @@ class SimplifiedGame:
                         ty = max(0, min(self.tile_map.grid_height - 1, ty))
                         if not self.tile_map.is_wall(tx, ty):
                             unit.current_path = find_path(self.tile_map, unit_pos, (tx, ty))
+                            if unit.current_path: unit.current_path.pop(0) # Remove current position
                             break # Found a valid target
 
             # Non-movement actions
@@ -262,17 +265,18 @@ class SimplifiedGame:
 
         # --- Step 3: Update Unit Positions from Paths ---
         results = []
-        for unit in self.units:
+        for unit in active_units:
             final_x, final_y = unit.x, unit.y
             if unit.current_path:
-                # Make sure the path is not empty and pop the current pos if needed
-                if unit.current_path[0] == (unit.x, unit.y):
-                    unit.current_path.pop(0)
-
-                if unit.current_path:
-                    final_x, final_y = unit.current_path.pop(0)
+                # Move to the next step and consume it from the path
+                final_x, final_y = unit.current_path.pop(0)
 
             results.append((unit.id, final_x, final_y))
+
+        # Add non-moving dead units to results
+        dead_units = [u for u in self.units if u.is_dead]
+        for unit in dead_units:
+            results.append((unit.id, unit.x, unit.y))
 
         self._update_units_from_results(results)
 
