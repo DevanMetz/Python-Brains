@@ -162,6 +162,15 @@ class SimplifiedUI:
             )
             editor_y += 40
 
+        self.save_map_button_editor = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, editor_y), (rect.width - 40, 30)),
+            text='Save Map', manager=manager, container=self.editor_panel)
+        editor_y += 40
+        self.load_map_button_editor = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, editor_y), (rect.width - 40, 30)),
+            text='Load Map', manager=manager, container=self.editor_panel)
+        editor_y += 40
+
         self.editor_panel.set_scrollable_area_dimensions((rect.width - 30, editor_y))
 
 
@@ -194,15 +203,6 @@ class SimplifiedUI:
         self.controls_panel.show()
         self.editor_panel.hide()
 
-        # Move buttons back to sim panel
-        self.save_map_button.change_container(self.controls_panel)
-        self.load_map_button.change_container(self.controls_panel)
-
-
     def show_editor_ui(self):
         self.controls_panel.hide()
         self.editor_panel.show()
-
-        # Move buttons to editor panel
-        self.save_map_button.change_container(self.editor_panel)
-        self.load_map_button.change_container(self.editor_panel)
