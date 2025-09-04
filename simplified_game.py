@@ -326,6 +326,7 @@ class SimplifiedGame:
                 if dist_to_dropoff <= 1: # If at a dropoff point
                     if unit.cargo == unit.max_cargo:
                         unit.fitness_score += self.reward_dropoff_full
+                        print(f"DEBUG: Unit {unit.id} received +{self.reward_dropoff_full} reward for dropoff.")
 
                     unit.resources_deposited += unit.cargo
                     unit.cargo = 0 # Reset cargo after any delivery
