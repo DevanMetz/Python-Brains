@@ -10,7 +10,7 @@ def draw_mlp(surface, brain, input_labels=None, output_labels=None, activations=
         return
 
     font = pygame.font.SysFont("Arial", 12)
-    margin = 30
+    margin = 60 # Increased margin for labels
     width = surface.get_width() - margin * 2
     height = surface.get_height() - margin * 2
     pos = (margin, margin)

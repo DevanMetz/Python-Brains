@@ -68,7 +68,8 @@ class SimplifiedGame:
                  reward_dropoff_full=100, penalty_death=-200, reward_gather=5,
                  reward_move_to_resource=1, reward_move_to_dropoff=1,
                  penalty_invalid_gather=-10, penalty_damage=-2,
-                 penalty_idle=-1, penalty_full_idle=-1):
+                 penalty_idle=-1, penalty_full_idle=-1,
+                 reward_progress_to_dropoff=1.0):
         self.tile_map = TileMap(width, height, static_grid)
         self.units = []
         self.enemies = []
@@ -204,6 +205,7 @@ class SimplifiedGame:
         self.penalty_damage = float(settings.get('penalty_damage', self.penalty_damage))
         self.penalty_idle = float(settings.get('penalty_idle', self.penalty_idle))
         self.penalty_full_idle = float(settings.get('penalty_full_idle', self.penalty_full_idle))
+        self.reward_progress_to_dropoff = float(settings.get('reward_progress_to_dropoff', self.reward_progress_to_dropoff))
 
     def run_simulation_step(self):
         if not self.units: return
@@ -233,6 +235,14 @@ class SimplifiedGame:
         for unit in active_units:
             action = unit.last_action
             unit_pos = (unit.x, unit.y)
+
+            # Add continuous reward for moving to dropoff when carrying
+            if unit.is_carrying:
+                _, dist_to_dropoff = self._find_nearest_object(unit_pos, self.dropoff_locations)
+                if dist_to_dropoff is not float('inf'):
+                    max_dist = np.sqrt(self.tile_map.grid_width**2 + self.tile_map.grid_height**2)
+                    progress_reward = (1 - (dist_to_dropoff / max_dist))
+                    unit.fitness_score += progress_reward * self.reward_progress_to_dropoff
 
             # Add penalty for not returning to base when cargo is full
             if unit.cargo == unit.max_cargo and action != Action.MOVE_TO_DROPOFF:
