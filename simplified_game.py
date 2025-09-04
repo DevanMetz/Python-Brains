@@ -437,10 +437,13 @@ class SimplifiedGame:
         print(f"Fittest Unit Fitness Score: {fittest_unit.fitness_score}")
         print(f"Fittest Unit Resources Collected: {fittest_unit.resources_collected}")
         print(f"Fittest Unit Resources Deposited: {fittest_unit.resources_deposited}")
+
+        # Manual validation of score
+        validated_score = (fittest_unit.resources_deposited // 10) * self.reward_dropoff_full
+        print(f"VALIDATION: Score based on stats should be approx: {validated_score}")
         print("------------------")
 
         self.fittest_brain = fittest_unit.brain.clone()
-        self.best_fitness_components = (all_fitness_data[best_unit_index][1], all_fitness_data[best_unit_index][2])
         self.best_unit_collected = fittest_unit.resources_collected
         self.best_unit_deposited = fittest_unit.resources_deposited
 
