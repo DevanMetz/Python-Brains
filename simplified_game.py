@@ -430,6 +430,14 @@ class SimplifiedGame:
         best_unit_index = sorted_indices[0]
         fittest_unit = self.units[best_unit_index]
 
+        print("\n--- DEBUG INFO ---")
+        print(f"Generation: {self.generation}")
+        print(f"Fittest Unit ID: {fittest_unit.id}")
+        print(f"Fittest Unit Fitness Score: {fittest_unit.fitness_score}")
+        print(f"Fittest Unit Resources Collected: {fittest_unit.resources_collected}")
+        print(f"Fittest Unit Resources Deposited: {fittest_unit.resources_deposited}")
+        print("------------------")
+
         self.fittest_brain = fittest_unit.brain.clone()
         self.best_fitness_components = (all_fitness_data[best_unit_index][1], all_fitness_data[best_unit_index][2])
         self.best_unit_collected = fittest_unit.resources_collected
