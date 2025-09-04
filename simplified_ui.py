@@ -139,6 +139,32 @@ class SimplifiedUI:
 
         self.controls_panel.set_scrollable_area_dimensions((rect.width - 30, y_pos))
 
+        # --- Editor UI ---
+        self.editor_panel = pygame_gui.elements.UIPanel(
+            relative_rect=rect, manager=manager, visible=False
+        )
+        editor_y = 10
+        self.mode_button_editor = pygame_gui.elements.UIButton(
+             relative_rect=pygame.Rect((10, editor_y), (rect.width - 40, 30)),
+             text='Back to Simulation', manager=manager, container=self.editor_panel
+        )
+        editor_y += 50
+
+        self.editor_buttons = {}
+        button_data = [
+            ('wall', 'Place Wall'), ('resource', 'Place Resource'),
+            ('empty', 'Eraser'), ('base', 'Set Base'), ('target', 'Set Target')
+        ]
+        for name, text in button_data:
+            self.editor_buttons[name] = pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((10, editor_y), (rect.width - 40, 30)),
+                text=text, manager=manager, container=self.editor_panel
+            )
+            editor_y += 40
+
+        self.editor_panel.set_scrollable_area_dimensions((rect.width - 30, editor_y))
+
+
     def get_current_settings(self):
         settings = {name: slider.get_current_value() for name, slider in self.sliders.items()}
         settings['mlp_arch_str'] = self.mlp_arch_input.get_text()
@@ -165,12 +191,18 @@ class SimplifiedUI:
         draw_mlp(surface, brain, input_labels, activations, output_labels)
 
     def show_simulation_ui(self):
-        self.mode_button.set_text('Enter Editor Mode')
-        for child in self.controls_panel.get_container().elements:
-            if child != self.mode_button: child.show()
+        self.controls_panel.show()
+        self.editor_panel.hide()
+
+        # Move buttons back to sim panel
+        self.save_map_button.change_container(self.controls_panel)
+        self.load_map_button.change_container(self.controls_panel)
+
 
     def show_editor_ui(self):
-        self.mode_button.set_text('Back to Simulation')
-        for child in self.controls_panel.get_container().elements:
-            if child != self.mode_button:
-                child.hide()
+        self.controls_panel.hide()
+        self.editor_panel.show()
+
+        # Move buttons to editor panel
+        self.save_map_button.change_container(self.editor_panel)
+        self.load_map_button.change_container(self.editor_panel)

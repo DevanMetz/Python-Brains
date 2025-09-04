@@ -32,6 +32,9 @@ RESOURCE_COLOR = (255, 180, 0)
 class GameState(Enum):
     SIMULATING, EDITING, PAUSED, FAST_FORWARDING = 1, 2, 3, 4
 
+class EditorBrush(Enum):
+    WALL, RESOURCE, EMPTY, BASE, TARGET = range(5)
+
 def draw_game_world(surface, game):
     surface.fill(BLACK)
     for x in range(game.tile_map.grid_width):
@@ -142,6 +145,7 @@ def main():
     step_counter, measured_sps, sps_counter, sps_timer, time_since_last_step = 0, 0, 0, 0.0, 0.0
     ff_generations_to_run, ff_generations_completed = 0, 0
     current_state = GameState.SIMULATING
+    editor_brush = EditorBrush.WALL
     running = True
 
     while running:
@@ -157,22 +161,27 @@ def main():
 
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
                 settings = ui.get_current_settings()
-                if event.ui_element == ui.mode_button:
+
+                # Mode switching
+                if event.ui_element == ui.mode_button or event.ui_element == ui.mode_button_editor:
                     current_state = GameState.SIMULATING if current_state == GameState.EDITING else GameState.EDITING
                     ui.show_editor_ui() if current_state == GameState.EDITING else ui.show_simulation_ui()
+                    if current_state == GameState.EDITING:
+                        ui.pause_button.disable()
+                        ui.restart_button.disable()
+                        ui.fast_forward_button.disable()
+                    else:
+                        ui.pause_button.enable()
+                        ui.restart_button.enable()
+                        ui.fast_forward_button.enable()
+
+                # Sim controls
                 elif event.ui_element == ui.pause_button:
                     if current_state == GameState.SIMULATING: current_state = GameState.PAUSED
                     elif current_state == GameState.PAUSED: current_state = GameState.SIMULATING
                 elif event.ui_element == ui.restart_button:
                     game.restart()
                     step_counter, current_state = 0, GameState.SIMULATING
-                elif event.ui_element == ui.save_map_button: save_map(game, SAVED_MAP_PATH)
-                elif event.ui_element == ui.load_map_button:
-                    loaded_map = load_map(SAVED_MAP_PATH)
-                    if loaded_map is not None:
-                        game_config = create_game_config_from_settings(settings)
-                        game = SimplifiedGame(width=loaded_map.shape[0], height=loaded_map.shape[1], static_grid=loaded_map, **game_config)
-                        step_counter = 0
                 elif event.ui_element == ui.apply_button:
                     game.update_settings(create_game_config_from_settings(settings))
                     step_counter = 0
@@ -180,7 +189,26 @@ def main():
                     if current_state in [GameState.SIMULATING, GameState.PAUSED]:
                         current_state = GameState.FAST_FORWARDING
                         ff_generations_to_run, ff_generations_completed = 10, 0
-                        ui.pause_button.disable(); ui.restart_button.disable()
+                        ui.pause_button.disable(); ui.restart_button.disable(); ui.mode_button.disable()
+                        ui.apply_button.disable(); ui.load_map_button.disable(); ui.save_map_button.disable()
+
+                # Map controls
+                elif event.ui_element == ui.save_map_button or event.ui_element == ui.save_map_button_editor:
+                    save_map(game, SAVED_MAP_PATH)
+                elif event.ui_element == ui.load_map_button or event.ui_element == ui.load_map_button_editor:
+                    loaded_map = load_map(SAVED_MAP_PATH)
+                    if loaded_map is not None:
+                        game_config = create_game_config_from_settings(settings)
+                        game = SimplifiedGame(width=loaded_map.shape[0], height=loaded_map.shape[1], static_grid=loaded_map, **game_config)
+                        step_counter = 0
+
+                # Editor brush selection
+                elif event.ui_element == ui.editor_buttons['wall']: editor_brush = EditorBrush.WALL
+                elif event.ui_element == ui.editor_buttons['resource']: editor_brush = EditorBrush.RESOURCE
+                elif event.ui_element == ui.editor_buttons['empty']: editor_brush = EditorBrush.EMPTY
+                elif event.ui_element == ui.editor_buttons['base']: editor_brush = EditorBrush.BASE
+                elif event.ui_element == ui.editor_buttons['target']: editor_brush = EditorBrush.TARGET
+
             ui_manager.process_events(event)
 
         ui_manager.update(time_delta)
@@ -200,14 +228,16 @@ def main():
                 time_since_last_step -= step_interval
 
         elif current_state == GameState.EDITING:
-            buttons, keys, (mx, my) = pygame.mouse.get_pressed(), pygame.key.get_pressed(), pygame.mouse.get_pos()
-            if game_world_rect.collidepoint(mx, my):
+            buttons, (mx, my) = pygame.mouse.get_pressed(), pygame.mouse.get_pos()
+            if game_world_rect.collidepoint(mx, my) and buttons[0]: # Left mouse button
                 scaled_mx, scaled_my = mx * (game_world_surface.get_width() / game_world_rect.width), my * (game_world_surface.get_height() / game_world_rect.height)
                 grid_x, grid_y = int(scaled_mx // TILE_SIZE), int(scaled_my // TILE_SIZE)
-                if buttons[0] and (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]): game.spawn_point = (grid_x, grid_y)
-                elif buttons[0]: game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
-                elif buttons[2]: game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
-                elif buttons[1]: game.target = (grid_x, grid_y)
+
+                if editor_brush == EditorBrush.WALL: game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
+                elif editor_brush == EditorBrush.RESOURCE: game.tile_map.set_tile(grid_x, grid_y, Tile.RESOURCE)
+                elif editor_brush == EditorBrush.EMPTY: game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
+                elif editor_brush == EditorBrush.BASE: game.spawn_point = (grid_x, grid_y)
+                elif editor_brush == EditorBrush.TARGET: game.target = (grid_x, grid_y)
 
         elif current_state == GameState.FAST_FORWARDING:
             for _ in range(settings['sim_length']): game.run_simulation_step()
@@ -215,7 +245,8 @@ def main():
             step_counter, ff_generations_completed = 0, ff_generations_completed + 1
             if ff_generations_completed >= ff_generations_to_run:
                 current_state = GameState.SIMULATING
-                ui.pause_button.enable(); ui.restart_button.enable()
+                ui.pause_button.enable(); ui.restart_button.enable(); ui.mode_button.enable()
+                ui.apply_button.enable(); ui.load_map_button.enable(); ui.save_map_button.enable()
 
         if sps_timer >= 1.0:
             measured_sps, sps_counter, sps_timer = sps_counter, 0, sps_timer - 1.0

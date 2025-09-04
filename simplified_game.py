@@ -206,20 +206,19 @@ class SimplifiedGame:
         self._update_units_from_results(results)
 
     def _run_step_gpu(self):
-        inputs_batch = np.array([self._get_unit_inputs(u) for u in self.units if u.mining_timer == 0], dtype=np.float16)
+        active_units_indices = [i for i, u in enumerate(self.units) if u.mining_timer == 0]
 
-        active_units = [u for u in self.units if u.mining_timer == 0]
-
-        if not active_units:
-             outputs_batch = []
+        if not active_units_indices:
+            outputs_batch = []
         else:
-             outputs_batch = self.batch_processor.forward_batch(inputs_batch)
-             if outputs_batch is None: return self._run_step_cpu()
+            inputs_batch = np.array([self._get_unit_inputs(self.units[i]) for i in active_units_indices], dtype=np.float16)
+            outputs_batch = self.batch_processor.forward_batch(inputs_batch)
+            if outputs_batch is None: return self._run_step_cpu()
 
         actions = np.argmax(outputs_batch, axis=1)
         results = []
 
-        active_unit_idx = 0
+        action_idx = 0
         for i, unit in enumerate(self.units):
             mined_resource = False
             action = unit.last_action
@@ -230,14 +229,14 @@ class SimplifiedGame:
                 if unit.mining_timer == 0:
                     if self.tile_map.remove_resource(unit.x, unit.y):
                         mined_resource = True
-            elif active_unit_idx < len(actions):
-                action = Action(actions[active_unit_idx])
+            elif i in active_units_indices:
+                action = Action(actions[action_idx])
                 if action == Action.MINE:
                     if self.tile_map.is_resource(unit.x, unit.y):
                         unit.mining_timer = 5
                     else:
                         action = Action.STAY
-                active_unit_idx += 1
+                action_idx += 1
 
             unit.last_action = action
             final_x, final_y = determine_new_position(unit.x, unit.y, action, self.tile_map)
