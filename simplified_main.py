@@ -8,7 +8,7 @@ import numpy as np
 import time
 import os
 from enum import Enum
-from simplified_game import SimplifiedGame, Tile, get_vision_inputs
+from simplified_game import SimplifiedGame, Tile
 from simplified_ui import SimplifiedUI
 
 # --- Constants ---
