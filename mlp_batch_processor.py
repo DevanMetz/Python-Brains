@@ -21,7 +21,8 @@ if OPENCL_AVAILABLE:
                                           __global const half *biases_batch,
                                           __global half *output_batch,
                                           int input_size,
-                                          int output_size)
+                                          int output_size,
+                                          int apply_activation)
         {
             int unit_idx = get_global_id(0);
             int neuron_idx = get_global_id(1);
@@ -36,7 +37,8 @@ if OPENCL_AVAILABLE:
 
             sum += biases_batch[unit_idx * output_size + neuron_idx];
 
-            output_batch[unit_idx * output_size + neuron_idx] = tanh(sum);
+            // Conditionally apply tanh activation
+            output_batch[unit_idx * output_size + neuron_idx] = apply_activation ? tanh(sum) : sum;
         }
         """
 
@@ -90,26 +92,36 @@ if OPENCL_AVAILABLE:
             inputs_gpu = cl_array.to_device(self.queue, inputs_batch.astype(self.dtype))
             current_layer_output_gpu = inputs_gpu
 
-            for i in range(len(self.mlp_arch) - 1):
+            # Process hidden layers with tanh activation
+            num_hidden_layers = len(self.mlp_arch) - 2
+            for i in range(num_hidden_layers):
                 input_size = self.mlp_arch[i]
                 output_size = self.mlp_arch[i+1]
+                output_gpu = cl_array.empty(self.queue, (self.population_size, output_size), dtype=self.dtype)
 
-                output_shape = (self.population_size, output_size)
-                output_gpu = cl_array.empty(self.queue, output_shape, dtype=self.dtype)
-
-                self.kernel(self.queue,
-                            (self.population_size, output_size),
-                            None,
-                            current_layer_output_gpu.data,
-                            self.weights_gpu[i].data,
-                            self.biases_gpu[i].data,
-                            output_gpu.data,
-                            np.int32(input_size),
-                            np.int32(output_size))
-
+                self.kernel(self.queue, (self.population_size, output_size), None,
+                            current_layer_output_gpu.data, self.weights_gpu[i].data,
+                            self.biases_gpu[i].data, output_gpu.data,
+                            np.int32(input_size), np.int32(output_size), np.int32(1)) # apply_activation = true
                 current_layer_output_gpu = output_gpu
 
-            return current_layer_output_gpu.get()
+            # Process output layer to get raw logits (no activation)
+            last_layer_idx = len(self.mlp_arch) - 2
+            input_size = self.mlp_arch[last_layer_idx]
+            output_size = self.mlp_arch[last_layer_idx+1]
+            logits_gpu = cl_array.empty(self.queue, (self.population_size, output_size), dtype=self.dtype)
+
+            self.kernel(self.queue, (self.population_size, output_size), None,
+                        current_layer_output_gpu.data, self.weights_gpu[last_layer_idx].data,
+                        self.biases_gpu[last_layer_idx].data, logits_gpu.data,
+                        np.int32(input_size), np.int32(output_size), np.int32(0)) # apply_activation = false
+
+            # Get logits from GPU and apply softmax on CPU
+            logits = logits_gpu.get()
+            e_x = np.exp(logits - np.max(logits, axis=1, keepdims=True))
+            softmax_probs = e_x / e_x.sum(axis=1, keepdims=True)
+
+            return softmax_probs.astype(self.dtype)
 
 else:
     class MLPBatchProcessor:
