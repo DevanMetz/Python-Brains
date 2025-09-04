@@ -138,10 +138,11 @@ class SimplifiedUI:
     def draw_fittest_brain(self, surface, brain, activations=None):
         surface.fill(pygame.Color("#303030"))
         input_labels = [
-            "N", "NE", "E", "SE", "S", "SW", "W", "NW", "dX", "dY",
-            "LM_N", "LM_E", "LM_S", "LM_W", "Dist"
+            "HP", "Carry", "Cargo", "Res_dX", "Res_dY",
+            "Base_dX", "Base_dY", "Attacked", "En_dX", "En_dY"
         ]
-        draw_mlp(surface, brain, input_labels, activations)
+        output_labels = ["To_Res", "Gather", "To_Base", "Flee", "Idle"]
+        draw_mlp(surface, brain, input_labels, output_labels, activations)
 
     def show_simulation_ui(self):
         self.mode_button.set_text('Enter Editor Mode')

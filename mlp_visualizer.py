@@ -1,10 +1,10 @@
 import pygame
 import numpy as np
 
-def draw_mlp(surface, brain, input_labels=None, activations=None):
+def draw_mlp(surface, brain, input_labels=None, output_labels=None, activations=None):
     """
     Draws a representation of the MLP's structure and weights onto a surface.
-    Optionally labels the input nodes and colors them based on activation.
+    Optionally labels the input/output nodes and colors them based on activation.
     """
     if not brain:
         return
@@ -64,6 +64,10 @@ def draw_mlp(surface, brain, input_labels=None, activations=None):
             if i == 0 and input_labels and j < len(input_labels):
                 label_text = font.render(input_labels[j], True, (200, 200, 200))
                 surface.blit(label_text, (node_pos[0] - node_radius - label_text.get_width() - 5, node_pos[1] - label_text.get_height() / 2))
+
+            if i == num_layers - 1 and output_labels and j < len(output_labels):
+                label_text = font.render(output_labels[j], True, (200, 200, 200))
+                surface.blit(label_text, (node_pos[0] + node_radius + 5, node_pos[1] - label_text.get_height() / 2))
 
     input_text = font.render("Inputs", True, (200, 200, 200))
     output_text = font.render("Outputs", True, (200, 200, 200))
