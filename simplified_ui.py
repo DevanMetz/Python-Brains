@@ -92,8 +92,16 @@ class SimplifiedUI:
         self.reward_settings_button = pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
             text='Reward Settings', manager=manager, container=self.controls_panel)
-        self.simulation_controls.append(self.reward_settings_button)
         y_pos += 40
+        self.save_settings_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
+            text='Save Settings', manager=manager, container=self.controls_panel)
+        y_pos += 40
+        self.load_settings_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
+            text='Load Settings', manager=manager, container=self.controls_panel)
+        y_pos += 40
+        self.simulation_controls.extend([self.reward_settings_button, self.save_settings_button, self.load_settings_button])
 
         # --- Editor Controls ---
         self.selected_brush_label = pygame_gui.elements.UILabel(
@@ -170,6 +178,24 @@ class SimplifiedUI:
             control.hide()
         for control in self.editor_controls:
             control.show()
+
+    def update_ui_from_settings(self, settings):
+        # Update sliders
+        for name, slider in self.sliders.items():
+            if name in settings:
+                slider.set_current_value(float(settings[name]))
+
+        # Update text inputs
+        if 'mlp_arch_str' in settings:
+            self.mlp_arch_input.set_text(str(settings['mlp_arch_str']))
+
+        # Update reward window if it's open
+        if self.reward_window:
+            for name, entry in self.reward_inputs.items():
+                if name in settings:
+                    entry.set_text(str(settings[name]))
+
+        self.update_labels()
 
     def create_reward_window(self, game):
         window_rect = pygame.Rect((100, 100), (350, 480))

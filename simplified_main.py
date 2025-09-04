@@ -7,6 +7,7 @@ import pygame_gui
 import numpy as np
 import time
 import os
+import json
 from enum import Enum
 from simplified_game import SimplifiedGame, Tile
 from simplified_ui import SimplifiedUI
@@ -22,6 +23,7 @@ FPS = 60
 MAPS_DIR = "maps"
 DEFAULT_MAP_PATH = os.path.join(MAPS_DIR, "default.csv")
 SAVED_MAP_PATH = os.path.join(MAPS_DIR, "saved_map.csv")
+SETTINGS_FILE_PATH = "settings.json"
 
 # --- Colors ---
 BLACK, WHITE = (0, 0, 0), (255, 255, 255)
@@ -114,12 +116,36 @@ def load_or_create_default_map():
     save_map(temp_game, DEFAULT_MAP_PATH)
     return temp_game.tile_map.static_grid
 
+def load_preferred_map():
+    if os.path.exists(SAVED_MAP_PATH):
+        print(f"Loaded map from {SAVED_MAP_PATH}")
+        return load_map(SAVED_MAP_PATH)
+    print("No saved map found, loading default map.")
+    return load_or_create_default_map()
+
 def create_game_config_from_settings(settings):
     config = settings.copy()
     config['perception_radius'] = config.pop('vision_radius', 5)
     config['steps_per_gen'] = config.pop('sim_length', 100)
     config.pop('sps', None)
     return config
+
+def save_settings(settings_dict):
+    with open(SETTINGS_FILE_PATH, 'w') as f:
+        json.dump(settings_dict, f, indent=4)
+    print(f"Settings saved to {SETTINGS_FILE_PATH}")
+
+def load_settings():
+    if not os.path.exists(SETTINGS_FILE_PATH):
+        return {}
+    with open(SETTINGS_FILE_PATH, 'r') as f:
+        try:
+            settings = json.load(f)
+            print(f"Settings loaded from {SETTINGS_FILE_PATH}")
+            return settings
+        except json.JSONDecodeError:
+            print(f"Error reading {SETTINGS_FILE_PATH}, it may be corrupted.")
+            return {}
 
 def main():
     pygame.init()
@@ -140,8 +166,12 @@ def main():
         return manager, ui, visualizer_panel, game_world_rect
 
     ui_manager, ui, visualizer_panel, game_world_rect = setup_ui(SCREEN_WIDTH, SCREEN_HEIGHT)
-    default_map = load_or_create_default_map()
-    game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=default_map)
+    initial_map = load_preferred_map()
+
+    # Autoload settings and create game config
+    initial_settings = load_settings()
+    game_config = create_game_config_from_settings(initial_settings)
+    game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=initial_map, **game_config)
 
     step_counter, measured_sps, sps_counter, sps_timer, time_since_last_step = 0, 0, 0, 0.0, 0.0
     ff_generations_to_run, ff_generations_completed = 0, 0
@@ -212,6 +242,21 @@ def main():
                     game.update_settings(reward_settings)
                     ui.reward_window.kill()
                     ui.reward_window = None
+
+                elif event.ui_element == ui.save_settings_button:
+                    all_settings = ui.get_current_settings()
+                    if ui.reward_window: # If reward window is open, get its values too
+                        reward_settings = {name: entry.get_text() for name, entry in ui.reward_inputs.items()}
+                        all_settings.update(reward_settings)
+                    save_settings(all_settings)
+
+                elif event.ui_element == ui.load_settings_button:
+                    loaded_settings = load_settings()
+                    if loaded_settings:
+                        game_config = create_game_config_from_settings(loaded_settings)
+                        game.update_settings(game_config)
+                        ui.update_ui_from_settings(loaded_settings)
+
 
                 elif event.ui_element == ui.fast_forward_button:
                     if current_state in [GameState.SIMULATING, GameState.PAUSED]:
