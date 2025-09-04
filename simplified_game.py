@@ -68,8 +68,8 @@ class SimplifiedGame:
                  reward_dropoff_full=100, penalty_death=-200, reward_gather=5,
                  reward_move_to_resource=1, reward_move_to_dropoff=1,
                  penalty_invalid_gather=-10, penalty_damage=-2,
-                 penalty_idle=-1, penalty_full_idle=-1,
-                 reward_progress_to_dropoff=1.0):
+                 penalty_idle=-1, penalty_full_idle=-5,
+                 reward_progress_to_dropoff=2.0):
         self.tile_map = TileMap(width, height, static_grid)
         self.units = []
         self.enemies = []
