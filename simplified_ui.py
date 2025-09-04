@@ -92,7 +92,23 @@ class SimplifiedUI:
             options_list=expl_options, starting_option=expl_options[1],
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
             manager=manager, container=self.controls_panel)
+        y_pos += 40
+
+        pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
+            text='Reward System:', manager=manager, container=self.controls_panel)
+        y_pos += 25
+        reward_options = ['Navigation', 'Resource Collection']
+        self.dropdowns['reward_system'] = pygame_gui.elements.UIDropDownMenu(
+            options_list=reward_options, starting_option=reward_options[0],
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
+            manager=manager, container=self.controls_panel)
         y_pos += 50
+
+        self.bank_label = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
+            text='Bank: 0', manager=manager, container=self.controls_panel)
+        y_pos += 30
 
         pygame_gui.elements.UILabel(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
@@ -130,18 +146,23 @@ class SimplifiedUI:
             settings[name] = dropdown.selected_option
         return settings
 
-    def update_labels(self):
+    def update_labels(self, bank_amount=0):
         for name, (label, label_format) in self.slider_labels.items():
             value = self.sliders[name].get_current_value()
             label.set_text(label_format.format(value))
+        self.bank_label.set_text(f'Bank: {bank_amount}')
 
     def draw_fittest_brain(self, surface, brain, activations=None):
         surface.fill(pygame.Color("#303030"))
         input_labels = [
-            "N", "NE", "E", "SE", "S", "SW", "W", "NW", "dX", "dY",
-            "LM_N", "LM_E", "LM_S", "LM_W", "Dist"
+            "W_N", "W_NE", "W_E", "W_SE", "W_S", "W_SW", "W_W", "W_NW", # Wall vision
+            "R_N", "R_NE", "R_E", "R_SE", "R_S", "R_SW", "R_W", "R_NW", # Resource vision
+            "dX", "dY", "Dist",
+            "LM_N", "LM_E", "LM_S", "LM_W", "L_STAY", "L_MINE",
+            "Inv"
         ]
-        draw_mlp(surface, brain, input_labels, activations)
+        output_labels = ["MOVE_N", "MOVE_E", "MOVE_S", "MOVE_W", "STAY", "MINE"]
+        draw_mlp(surface, brain, input_labels, activations, output_labels)
 
     def show_simulation_ui(self):
         self.mode_button.set_text('Enter Editor Mode')
