@@ -45,7 +45,7 @@ class SimplifiedUnit:
 
         # Pathfinding and action state
         self.current_path = []
-        self.last_action = Action.STAY # This will be the high-level action
+        self.last_action = Action.IDLE # This will be the high-level action
         self.goal_type = None
         self.goal_pos = None
 
