@@ -55,12 +55,6 @@ class SimplifiedUnit:
         self.resources_collected = 0
         self.resources_deposited = 0
 
-    def clone(self):
-        # When a unit is cloned for the next generation, it gets a fresh brain
-        # and its state is reset by the __init__ method.
-        cloned = SimplifiedUnit(self.id, self.x, self.y, self.brain.clone(), self.max_health, self.max_cargo)
-        return cloned
-
 class Enemy:
     def __init__(self, x, y):
         self.x = x
@@ -326,7 +320,6 @@ class SimplifiedGame:
                 if dist_to_dropoff <= 1: # If at a dropoff point
                     if unit.cargo == unit.max_cargo:
                         unit.fitness_score += self.reward_dropoff_full
-                        print(f"DEBUG: Unit {unit.id} received +{self.reward_dropoff_full} reward for dropoff.")
 
                     unit.resources_deposited += unit.cargo
                     unit.cargo = 0 # Reset cargo after any delivery
@@ -431,18 +424,6 @@ class SimplifiedGame:
         best_unit_index = sorted_indices[0]
         fittest_unit = self.units[best_unit_index]
 
-        print("\n--- DEBUG INFO ---")
-        print(f"Generation: {self.generation}")
-        print(f"Fittest Unit ID: {fittest_unit.id}")
-        print(f"Fittest Unit Fitness Score: {fittest_unit.fitness_score}")
-        print(f"Fittest Unit Resources Collected: {fittest_unit.resources_collected}")
-        print(f"Fittest Unit Resources Deposited: {fittest_unit.resources_deposited}")
-
-        # Manual validation of score
-        validated_score = (fittest_unit.resources_deposited // 10) * self.reward_dropoff_full
-        print(f"VALIDATION: Score based on stats should be approx: {validated_score}")
-        print("------------------")
-
         self.fittest_brain = fittest_unit.brain.clone()
         self.best_unit_collected = fittest_unit.resources_collected
         self.best_unit_deposited = fittest_unit.resources_deposited
@@ -450,10 +431,12 @@ class SimplifiedGame:
         sorted_units = [self.units[i] for i in sorted_indices]
         num_elites = self.population_size // 10
 
-        next_gen_units = [u.clone() for u in sorted_units[:num_elites]]
-        for unit in next_gen_units:
-            unit.x, unit.y = self.spawn_point
-            unit.visited_tiles = set([self.spawn_point])
+        next_gen_units = []
+        for elite_unit in sorted_units[:num_elites]:
+            new_id = len(next_gen_units)
+            new_brain = elite_unit.brain.clone()
+            new_unit = SimplifiedUnit(new_id, self.spawn_point[0], self.spawn_point[1], new_brain)
+            next_gen_units.append(new_unit)
 
         elite_pool = sorted_units[:num_elites] if num_elites > 0 else [sorted_units[0]]
         while len(next_gen_units) < self.population_size:
