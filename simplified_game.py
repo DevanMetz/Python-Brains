@@ -52,6 +52,7 @@ class SimplifiedUnit:
     def __init__(self, id, x, y, brain: MLP):
         self.id, self.x, self.y, self.brain = id, x, y, brain
         self.visited_tiles = set([(x, y)])
+        self.last_action = Action.STAY
 
     def clone(self):
         return SimplifiedUnit(self.id, self.x, self.y, self.brain.clone())
@@ -83,7 +84,7 @@ class SimplifiedGame:
             hidden_layers = [int(n.strip()) for n in mlp_arch_str.split(',') if n.strip()]
         except ValueError:
             hidden_layers = [16]
-        num_inputs = 10
+        num_inputs = 14 # 8 vision + 2 target vector + 4 last action
         num_outputs = len(Action)
         self.mlp_arch = [num_inputs] + hidden_layers + [num_outputs]
 
@@ -162,6 +163,7 @@ class SimplifiedGame:
             inputs = self._get_unit_inputs(unit)
             action_probs, _ = unit.brain.forward(inputs)
             action = Action(np.argmax(action_probs))
+            unit.last_action = action
             final_x, final_y = determine_new_position(unit.x, unit.y, action, self.tile_map.static_grid)
             results.append((unit.id, final_x, final_y))
         self.update_simulation_with_results(results)
@@ -179,6 +181,7 @@ class SimplifiedGame:
         results = []
         for i, unit in enumerate(self.units):
             action = Action(actions[i])
+            unit.last_action = action
             final_x, final_y = determine_new_position(unit.x, unit.y, action, self.tile_map.static_grid)
             results.append((unit.id, final_x, final_y))
         self.update_simulation_with_results(results)
@@ -187,7 +190,14 @@ class SimplifiedGame:
         vision = get_vision_inputs(unit.x, unit.y, self.tile_map.static_grid, self.perception_radius)
         dx = (self.target[0] - unit.x) / self.tile_map.grid_width
         dy = (self.target[1] - unit.y) / self.tile_map.grid_height
-        return np.concatenate((vision, [dx, dy]))
+        target_vector = np.array([dx, dy])
+
+        # One-hot encode the last action (4 inputs for 4 move directions)
+        last_action_vector = np.zeros(4)
+        if unit.last_action.value < 4: # Only for MOVE_N, E, S, W
+            last_action_vector[unit.last_action.value] = 1.0
+
+        return np.concatenate((vision, target_vector, last_action_vector))
 
     def update_simulation_with_results(self, results):
         for unit_id, new_x, new_y in results:
