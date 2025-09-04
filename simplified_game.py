@@ -5,26 +5,14 @@ It is designed to be independent of Pygame for easier testing and multiprocessin
 import numpy as np
 from enum import Enum
 from mlp import MLP
+from mlp_batch_processor import MLPBatchProcessor, OPENCL_AVAILABLE
 
 # --- Enums ---
-class Tile(Enum):
-    """An enumeration for the different types of tiles."""
-    EMPTY = 0
-    WALL = 1
-    UNIT = 2
-    TARGET = 3
-
-class Action(Enum):
-    """Discrete actions a unit can take."""
-    MOVE_N = 0
-    MOVE_E = 1
-    MOVE_S = 2
-    MOVE_W = 3
-    STAY = 4
+class Tile(Enum): EMPTY = 0; WALL = 1
+class Action(Enum): MOVE_N, MOVE_E, MOVE_S, MOVE_W, STAY = range(5)
 
 # --- Simulation Classes ---
 class TileMap:
-    """Manages the tile-based map for the simulation."""
     def __init__(self, grid_width, grid_height, static_grid=None):
         self.grid_width = grid_width
         self.grid_height = grid_height
@@ -32,71 +20,77 @@ class TileMap:
             self.static_grid = static_grid
         else:
             self.static_grid = np.full((self.grid_width, self.grid_height), Tile.EMPTY.value, dtype=int)
-        self.dynamic_grid = np.full((self.grid_width, self.grid_height), Tile.EMPTY.value, dtype=int)
 
-    def set_tile(self, grid_x, grid_y, tile_type):
-        if 0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height:
-            self.static_grid[grid_x, grid_y] = tile_type.value
+    def set_tile(self, x, y, tile_type: Tile):
+        if 0 <= x < self.grid_width and 0 <= y < self.grid_height:
+            self.static_grid[x, y] = tile_type.value
 
-    def get_tile_value(self, grid_x, grid_y):
-        """Gets the integer value of a tile at a given grid coordinate."""
-        if 0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height:
-            return self.static_grid[grid_x, grid_y]
-        return Tile.WALL.value
-
-    def update_dynamic_grid(self, units, target):
-        """Clears and rebuilds the dynamic grid with current unit and target positions."""
-        self.dynamic_grid.fill(Tile.EMPTY.value)
-        if target: self.dynamic_grid[target[0], target[1]] = Tile.TARGET.value
-        for unit in units:
-            if 0 <= unit.x < self.grid_width and 0 <= unit.y < self.grid_height:
-                self.dynamic_grid[unit.x, unit.y] = Tile.UNIT.value
+    def is_wall(self, x, y):
+        if 0 <= x < self.grid_width and 0 <= y < self.grid_height:
+            return self.static_grid[x, y] == Tile.WALL.value
+        return True
 
 class SimplifiedUnit:
-    """Represents a single unit in the simplified simulation."""
-    def __init__(self, id, x, y, brain):
+    def __init__(self, id, x, y, brain: MLP):
         self.id, self.x, self.y, self.brain = id, x, y, brain
-        self.visited_tiles = set()
-        self.visited_tiles.add((x, y))
+        self.visited_tiles = set([(x, y)])
+        self.last_action = Action.STAY
 
     def clone(self):
-        # Note: visited_tiles is intentionally not cloned, it will be reset.
-        return SimplifiedUnit(self.id, self.x, self.y, self.brain.clone())
+        cloned = SimplifiedUnit(self.id, self.x, self.y, self.brain.clone())
+        cloned.last_action = self.last_action
+        return cloned
 
 class SimplifiedGame:
-    """Manages the overall state of the simplified simulation."""
     def __init__(self, width=40, height=30, population_size=100, mlp_arch_str="16",
                  perception_radius=5, steps_per_gen=100, mutation_rate=0.05,
-                 exploration_bonus=0.0, static_grid=None):
+                 proximity_bonus=1.0, exploration_bonus=0.0,
+                 proximity_func='Inverse Squared', exploration_func='Linear',
+                 static_grid=None):
         self.tile_map = TileMap(width, height, static_grid)
         self.units = []
         self.target = (width - 5, height // 2)
+        self.spawn_point = (5, height // 2)
         self.population_size = population_size
         self.generation = 0
         self.fittest_brain = None
+        self.batch_processor = None
+        self.best_fitness = 0.0
+        self.average_fitness = 0.0
+        self.best_fitness_components = (0.0, 0.0) # (proximity, exploration)
+        self.fitness_history = []
 
         self.perception_radius = perception_radius
         self.steps_per_generation = steps_per_gen
         self.mutation_rate = mutation_rate
+        self.proximity_bonus = proximity_bonus
         self.exploration_bonus = exploration_bonus
+        self.proximity_func = proximity_func
+        self.exploration_func = exploration_func
+        self.mlp_arch_str = mlp_arch_str
 
-        try:
-            hidden_layers = [int(n.strip()) for n in mlp_arch_str.split(',') if n.strip()]
-        except ValueError: hidden_layers = [16]
-
-        num_inputs = 10 # 8 vision rays + 2 for target vector
-        num_outputs = len(Action)
-        self.mlp_arch = [num_inputs] + hidden_layers + [num_outputs]
-
+        self._setup_mlp_arch(mlp_arch_str)
         self._initialize_population()
         if static_grid is None: self._create_walls()
 
+    def _setup_mlp_arch(self, mlp_arch_str):
+        try:
+            hidden_layers = [int(n.strip()) for n in mlp_arch_str.split(',') if n.strip()]
+        except ValueError: hidden_layers = [16]
+        num_inputs = 15
+        self.mlp_arch = [num_inputs] + hidden_layers + [len(Action)]
+        if OPENCL_AVAILABLE:
+            self.batch_processor = MLPBatchProcessor(self.population_size, self.mlp_arch, verbose=True)
+        else:
+            self.batch_processor = None
+
     def _initialize_population(self):
         self.units = []
-        start_x, start_y = 5, self.tile_map.grid_height // 2
         for i in range(self.population_size):
-            self.units.append(SimplifiedUnit(i, start_x, start_y, MLP(self.mlp_arch)))
-        self.tile_map.update_dynamic_grid(self.units, self.target)
+            brain = MLP(self.mlp_arch)
+            self.units.append(SimplifiedUnit(i, self.spawn_point[0], self.spawn_point[1], brain))
+            if self.batch_processor:
+                self.batch_processor.update_brain_on_gpu(i, brain)
 
     def _create_walls(self):
         if self.tile_map.grid_width > 20:
@@ -104,92 +98,168 @@ class SimplifiedGame:
         if self.tile_map.grid_width > 25:
             for x in range(25, self.tile_map.grid_width - 5): self.tile_map.set_tile(x, 10, Tile.WALL)
 
-    def update_simulation_with_results(self, results):
+    def restart(self):
+        self.generation = 0
+        self.fittest_brain = None
+        self.best_fitness = 0.0
+        self.average_fitness = 0.0
+        self.best_fitness_components = (0.0, 0.0)
+        self.fitness_history = []
+        self._initialize_population()
+        print("Simulation restarted.")
+
+    def update_settings(self, settings):
+        new_mlp_arch_str = settings.get('mlp_arch_str', self.mlp_arch_str)
+        new_pop_size = int(settings.get('population_size', self.population_size))
+        arch_changed = new_mlp_arch_str != self.mlp_arch_str
+        pop_changed = new_pop_size != self.population_size
+
+        if arch_changed or (pop_changed and self.batch_processor):
+            self.mlp_arch_str, self.population_size = new_mlp_arch_str, new_pop_size
+            self._setup_mlp_arch(self.mlp_arch_str)
+            self._initialize_population()
+            print("MLP architecture or population size changed. Population reset.")
+        elif pop_changed:
+            if new_pop_size > self.population_size:
+                for i in range(self.population_size, new_pop_size):
+                    self.units.append(SimplifiedUnit(i, self.spawn_point[0], self.spawn_point[1], MLP(self.mlp_arch)))
+            else:
+                self.units = self.units[:new_pop_size]
+            self.population_size = new_pop_size
+            for i, unit in enumerate(self.units): unit.id = i
+
+        self.perception_radius = int(settings.get('perception_radius', self.perception_radius))
+        self.steps_per_generation = int(settings.get('steps_per_gen', self.steps_per_generation))
+        self.mutation_rate = float(settings.get('mutation_rate', self.mutation_rate))
+        self.proximity_bonus = float(settings.get('proximity_bonus', self.proximity_bonus))
+        self.exploration_bonus = float(settings.get('exploration_bonus', self.exploration_bonus))
+        self.proximity_func = settings.get('proximity_func', self.proximity_func)
+        self.exploration_func = settings.get('exploration_func', self.exploration_func)
+
+    def run_simulation_step(self):
+        if not self.units: return
+        (self._run_step_gpu if self.batch_processor else self._run_step_cpu)()
+
+    def _run_step_cpu(self):
+        results = []
+        for unit in self.units:
+            inputs = self._get_unit_inputs(unit)
+            action_probs, _ = unit.brain.forward(inputs)
+            action = Action(np.argmax(action_probs))
+            unit.last_action = action
+            final_x, final_y = determine_new_position(unit.x, unit.y, action, self.tile_map)
+            results.append((unit.id, final_x, final_y))
+        self._update_units_from_results(results)
+
+    def _run_step_gpu(self):
+        inputs_batch = np.array([self._get_unit_inputs(u) for u in self.units], dtype=np.float16)
+        outputs_batch = self.batch_processor.forward_batch(inputs_batch)
+        if outputs_batch is None: return self._run_step_cpu()
+        actions = np.argmax(outputs_batch, axis=1)
+        results = []
+        for i, unit in enumerate(self.units):
+            action = Action(actions[i])
+            unit.last_action = action
+            final_x, final_y = determine_new_position(unit.x, unit.y, action, self.tile_map)
+            results.append((unit.id, final_x, final_y))
+        self._update_units_from_results(results)
+
+    def _get_unit_inputs(self, unit):
+        vision = get_vision_inputs(unit.x, unit.y, self.tile_map, self.perception_radius)
+        dx_norm = (self.target[0] - unit.x) / self.tile_map.grid_width
+        dy_norm = (self.target[1] - unit.y) / self.tile_map.grid_height
+        target_vector = np.array([dx_norm, dy_norm])
+        distance = np.sqrt(dx_norm**2 + dy_norm**2)
+        last_action_vector = np.zeros(4)
+        if unit.last_action.value < 4: last_action_vector[unit.last_action.value] = 1.0
+        return np.concatenate((vision, target_vector, last_action_vector, [distance]))
+
+    def _update_units_from_results(self, results):
         for unit_id, new_x, new_y in results:
             if unit_id < len(self.units):
-                unit = self.units[unit_id]
-                unit.x, unit.y = new_x, new_y
-                unit.visited_tiles.add((new_x, new_y))
-        self.tile_map.update_dynamic_grid(self.units, self.target)
+                self.units[unit_id].x, self.units[unit_id].y = new_x, new_y
+                self.units[unit_id].visited_tiles.add((new_x, new_y))
 
     def evolve_population(self):
-        fitness_scores = []
-        for unit in self.units:
-            dist_sq = (unit.x - self.target[0])**2 + (unit.y - self.target[1])**2
-            proximity_score = 1 / (dist_sq + 1)
-            exploration_score = self.exploration_bonus * len(unit.visited_tiles)
-            fitness = proximity_score + exploration_score
-            fitness_scores.append(fitness)
+        all_fitness_data = [self._calculate_fitness(u) for u in self.units]
+        fitness_scores = [f[0] for f in all_fitness_data]
+
+        self.best_fitness = np.max(fitness_scores)
+        self.average_fitness = np.mean(fitness_scores)
+        self.fitness_history.append(self.best_fitness)
 
         sorted_indices = np.argsort(fitness_scores)[::-1]
-        sorted_units = [self.units[i] for i in sorted_indices]
-        self.fittest_brain = sorted_units[0].brain.clone()
-        num_elites = self.population_size // 10
-        start_x, start_y = 5, self.tile_map.grid_height // 2
+        best_unit_index = sorted_indices[0]
 
-        # Elites are cloned, which creates new units with fresh visited_tiles sets
+        self.fittest_brain = self.units[best_unit_index].brain.clone()
+        self.best_fitness_components = (all_fitness_data[best_unit_index][1], all_fitness_data[best_unit_index][2])
+
+        sorted_units = [self.units[i] for i in sorted_indices]
+        num_elites = self.population_size // 10
+
         next_gen_units = [u.clone() for u in sorted_units[:num_elites]]
-        for unit in next_gen_units: unit.x, unit.y = start_x, start_y
+        for unit in next_gen_units:
+            unit.x, unit.y = self.spawn_point
+            unit.visited_tiles = set([self.spawn_point])
 
         elite_pool = sorted_units[:num_elites] if num_elites > 0 else [sorted_units[0]]
         while len(next_gen_units) < self.population_size:
             parent = np.random.choice(elite_pool)
             child_brain = parent.brain.clone()
-            child_brain.mutate(mutation_rate=self.mutation_rate, mutation_amount=0.1)
-            next_gen_units.append(SimplifiedUnit(len(next_gen_units), start_x, start_y, child_brain))
+            child_brain.mutate(self.mutation_rate, 0.1)
+            next_gen_units.append(SimplifiedUnit(len(next_gen_units), self.spawn_point[0], self.spawn_point[1], child_brain))
 
         self.units = next_gen_units
-        for i, unit in enumerate(self.units): unit.id = i
-
+        for i, unit in enumerate(self.units):
+            unit.id = i
+            if self.batch_processor: self.batch_processor.update_brain_on_gpu(i, unit.brain)
         self.generation += 1
-        self.tile_map.update_dynamic_grid(self.units, self.target)
-        print(f"Generation {self.generation} complete. Best fitness: {max(fitness_scores):.4f}")
 
-def get_vision_inputs(start_x, start_y, static_grid, vision_range):
+    def _calculate_fitness(self, unit):
+        # Proximity component
+        if self.proximity_func == 'None':
+            proximity_score = 0.0
+        else:
+            dist_sq = (unit.x - self.target[0])**2 + (unit.y - self.target[1])**2
+            if self.proximity_func == 'Inverse':
+                proximity_score = 1.0 / (np.sqrt(dist_sq) + 1.0)
+            elif self.proximity_func == 'Exponential':
+                proximity_score = np.exp(-0.1 * np.sqrt(dist_sq))
+            elif self.proximity_func == 'Logarithmic':
+                proximity_score = 1.0 / (np.log(dist_sq + 1) + 1)
+            else: # Inverse Squared (default)
+                proximity_score = 1.0 / (dist_sq + 1.0)
+
+        # Exploration component
+        if self.exploration_func == 'None':
+            exploration_score = 0.0
+        else:
+            visited_count = len(unit.visited_tiles)
+            if self.exploration_func == 'Square Root':
+                exploration_score = np.sqrt(visited_count)
+            else: # Linear (default)
+                exploration_score = float(visited_count)
+
+        total_fitness = (self.proximity_bonus * proximity_score) + (self.exploration_bonus * exploration_score)
+        return total_fitness, proximity_score, exploration_score
+
+def get_vision_inputs(start_x, start_y, tile_map, vision_range=5):
     directions = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)]
-    vision_inputs = np.zeros(8)
-    grid_width, grid_height = static_grid.shape
+    vision = np.zeros(8)
     for i, (dx, dy) in enumerate(directions):
-        dist = 1
-        found_wall = False
-        while dist <= vision_range:
-            check_x, check_y = start_x + dx * dist, start_y + dy * dist
-            if not (0 <= check_x < grid_width and 0 <= check_y < grid_height):
-                vision_inputs[i] = dist / vision_range
-                found_wall = True
+        for dist in range(1, vision_range + 1):
+            if tile_map.is_wall(start_x + dx * dist, start_y + dy * dist):
+                vision[i] = dist / vision_range
                 break
-            if static_grid[check_x, check_y] == Tile.WALL.value:
-                vision_inputs[i] = dist / vision_range
-                found_wall = True
-                break
-            dist += 1
-        if not found_wall:
-            vision_inputs[i] = 1.0
-    return vision_inputs
+        else:
+            vision[i] = 1.0
+    return vision
 
-def determine_new_position(unit_x, unit_y, action, static_grid):
-    new_x, new_y = unit_x, unit_y
-    if action == Action.MOVE_N: new_y -= 1
-    elif action == Action.MOVE_E: new_x += 1
-    elif action == Action.MOVE_S: new_y += 1
-    elif action == Action.MOVE_W: new_x -= 1
-    grid_width, grid_height = static_grid.shape
-    final_x, final_y = unit_x, unit_y
-    if 0 <= new_x < grid_width and 0 <= new_y < grid_height:
-        if static_grid[new_x, new_y] != Tile.WALL.value:
-            final_x, final_y = new_x, new_y
-    return final_x, final_y
-
-def process_unit_logic(args):
-    unit_id, unit_x, unit_y, brain_weights, brain_biases, static_grid, target_pos, mlp_arch, perception_radius = args
-    brain = MLP(mlp_arch)
-    brain.weights, brain.biases = brain_weights, brain_biases
-    vision_inputs = get_vision_inputs(unit_x, unit_y, static_grid, perception_radius)
-    dx_to_target = (target_pos[0] - unit_x) / static_grid.shape[0]
-    dy_to_target = (target_pos[1] - unit_y) / static_grid.shape[1]
-    target_inputs = np.array([dx_to_target, dy_to_target])
-    inputs = np.concatenate((vision_inputs, target_inputs))
-    action_probs, _ = brain.forward(inputs)
-    action = Action(np.argmax(action_probs))
-    final_x, final_y = determine_new_position(unit_x, unit_y, action, static_grid)
-    return (unit_id, final_x, final_y)
+def determine_new_position(x, y, action, tile_map):
+    dx, dy = 0, 0
+    if action == Action.MOVE_N: dy = -1
+    elif action == Action.MOVE_E: dx = 1
+    elif action == Action.MOVE_S: dy = 1
+    elif action == Action.MOVE_W: dx = -1
+    new_x, new_y = x + dx, y + dy
+    return (new_x, new_y) if not tile_map.is_wall(new_x, new_y) else (x, y)
