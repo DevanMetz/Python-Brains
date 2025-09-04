@@ -201,7 +201,7 @@ def main():
             sps_timer += time_delta
             time_since_last_step += time_delta
             step_interval = 1.0 / settings['sps'] if settings['sps'] > 0 else 0
-            while time_since_last_step >= step_interval:
+            if time_since_last_step >= step_interval:
                 if step_counter < settings['sim_length']:
                     game.run_simulation_step()
                     step_counter += 1; sps_counter += 1

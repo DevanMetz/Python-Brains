@@ -101,19 +101,23 @@ class SimplifiedGame:
         self._initialize_population()
         if static_grid is None: self._create_walls()
 
+        # Store a pristine copy of the grid for resets
+        self.pristine_static_grid = np.copy(self.tile_map.static_grid)
+
+
     def _initialize_map_objects(self):
-        self.enemies = []
-        self.resource_locations = []
-        self.dropoff_locations = []
-        # This grid is read-only during a generation
-        grid = self.tile_map.static_grid
+        self.enemies.clear()
+        self.resource_locations.clear()
+        self.dropoff_locations.clear()
+
+        # Use the pristine grid to find spawn locations
+        grid = self.pristine_static_grid if hasattr(self, 'pristine_static_grid') else self.tile_map.static_grid
+
         for x in range(grid.shape[0]):
             for y in range(grid.shape[1]):
                 tile = grid[x, y]
                 if tile == Tile.ENEMY.value:
                     self.enemies.append(Enemy(x, y))
-                    # Once spawned, the tile becomes empty space
-                    self.tile_map.set_tile(x, y, Tile.EMPTY)
                 elif tile == Tile.RESOURCE.value:
                     self.resource_locations.append((x,y))
                 elif tile == Tile.DROPOFF.value:
@@ -379,6 +383,9 @@ class SimplifiedGame:
                 self.units[unit_id].visited_tiles.add((new_x, new_y))
 
     def evolve_population(self):
+        # Reset enemies and other map objects for the new generation
+        self._initialize_map_objects()
+
         all_fitness_data = [self._calculate_fitness(u) for u in self.units]
         fitness_scores = [f[0] for f in all_fitness_data]
 
