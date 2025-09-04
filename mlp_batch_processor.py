@@ -14,20 +14,23 @@ if OPENCL_AVAILABLE:
         Manages a population of MLPs on the GPU for efficient batch processing.
         """
         _opencl_kernel_code = """
-        __kernel void forward_layer_batch(__global const float *input_batch,      // Shape: (pop_size, input_size)
-                                          __global const float *weights_batch,    // Shape: (pop_size, input_size, output_size)
-                                          __global const float *biases_batch,     // Shape: (pop_size, 1, output_size)
-                                          __global float *output_batch,     // Shape: (pop_size, output_size)
+        #pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+        __kernel void forward_layer_batch(__global const half *input_batch,
+                                          __global const half *weights_batch,
+                                          __global const half *biases_batch,
+                                          __global half *output_batch,
                                           int input_size,
                                           int output_size)
         {
             int unit_idx = get_global_id(0);
             int neuron_idx = get_global_id(1);
 
-            float sum = 0.0f;
+            half sum = 0.0h;
             for (int j = 0; j < input_size; ++j) {
-                float input_val = input_batch[unit_idx * input_size + j];
-                float weight_val = weights_batch[unit_idx * (input_size * output_size) + j * output_size + neuron_idx];
+                half input_val = input_batch[unit_idx * input_size + j];
+                long weight_idx = (long)unit_idx * (input_size * output_size) + (long)j * output_size + neuron_idx;
+                half weight_val = weights_batch[weight_idx];
                 sum += input_val * weight_val;
             }
 
@@ -47,6 +50,10 @@ if OPENCL_AVAILABLE:
             if ctx is None:
                 try:
                     self.ctx = cl.create_some_context(interactive=False)
+                    if 'cl_khr_fp16' not in self.ctx.devices[0].extensions:
+                        if verbose: print("MLPBatchProcessor: fp16 not supported. GPU acceleration disabled.")
+                        self.ctx = None
+                        return
                     if verbose:
                         print(f"MLPBatchProcessor using OpenCL device: {self.ctx.devices[0].name}")
                 except Exception:
@@ -58,50 +65,29 @@ if OPENCL_AVAILABLE:
 
             self.queue = cl.CommandQueue(self.ctx)
 
-            # Pre-allocate large buffers on the GPU for the entire population
+            self.dtype = np.float16
+
             self.weights_gpu = []
             self.biases_gpu = []
             for i in range(len(mlp_arch) - 1):
-                input_size = mlp_arch[i]
-                output_size = mlp_arch[i+1]
+                w_shape = (population_size, mlp_arch[i], mlp_arch[i+1])
+                self.weights_gpu.append(cl_array.empty(self.queue, w_shape, dtype=self.dtype))
+                b_shape = (population_size, mlp_arch[i+1])
+                self.biases_gpu.append(cl_array.empty(self.queue, b_shape, dtype=self.dtype))
 
-                w_shape = (population_size, input_size, output_size)
-                w_buffer = cl_array.empty(self.queue, w_shape, dtype=np.float32)
-                self.weights_gpu.append(w_buffer)
-
-                b_shape = (population_size, output_size) # Simplified for easier indexing
-                b_buffer = cl_array.empty(self.queue, b_shape, dtype=np.float32)
-                self.biases_gpu.append(b_buffer)
-
-            # Build the kernel
             self.prg = cl.Program(self.ctx, self._opencl_kernel_code).build()
             self.kernel = self.prg.forward_layer_batch
 
         def update_brain_on_gpu(self, unit_id: int, mlp: MLP):
-            """
-            Updates the weights and biases for a single unit on the GPU.
-            """
-            if not self.ctx or unit_id >= self.population_size:
-                return
-
+            if not self.ctx or unit_id >= self.population_size: return
             for i in range(len(mlp.weights)):
-                w_cpu = mlp.weights[i].astype(np.float32)
-                self.weights_gpu[i][unit_id].set(w_cpu)
-
-                # Reshape bias to match GPU buffer
-                b_cpu = mlp.biases[i].flatten().astype(np.float32)
-                self.biases_gpu[i][unit_id].set(b_cpu)
+                self.weights_gpu[i][unit_id].set(mlp.weights[i].astype(self.dtype))
+                self.biases_gpu[i][unit_id].set(mlp.biases[i].flatten().astype(self.dtype))
 
         def forward_batch(self, inputs_batch: np.ndarray):
-            """
-            Performs a forward pass for the entire batch of inputs.
-            """
-            if not self.kernel:
-                return None
+            if not self.kernel: return None
 
-            # Transfer inputs to GPU
-            inputs_gpu = cl_array.to_device(self.queue, inputs_batch.astype(np.float32))
-
+            inputs_gpu = cl_array.to_device(self.queue, inputs_batch.astype(self.dtype))
             current_layer_output_gpu = inputs_gpu
 
             for i in range(len(self.mlp_arch) - 1):
@@ -109,7 +95,7 @@ if OPENCL_AVAILABLE:
                 output_size = self.mlp_arch[i+1]
 
                 output_shape = (self.population_size, output_size)
-                output_gpu = cl_array.empty(self.queue, output_shape, dtype=np.float32)
+                output_gpu = cl_array.empty(self.queue, output_shape, dtype=self.dtype)
 
                 self.kernel(self.queue,
                             (self.population_size, output_size),
@@ -123,16 +109,10 @@ if OPENCL_AVAILABLE:
 
                 current_layer_output_gpu = output_gpu
 
-            final_output = current_layer_output_gpu.get()
-            return final_output
+            return current_layer_output_gpu.get()
 
 else:
-    # If OpenCL is not available, create a dummy class
     class MLPBatchProcessor:
-        """A dummy class to use when OpenCL is not available."""
-        def __init__(self, *args, **kwargs):
-            pass
-        def update_brain_on_gpu(self, *args, **kwargs):
-            pass
-        def forward_batch(self, *args, **kwargs):
-            return None
+        def __init__(self, *args, **kwargs): pass
+        def update_brain_on_gpu(self, *args, **kwargs): pass
+        def forward_batch(self, *args, **kwargs): return None

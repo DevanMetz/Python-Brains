@@ -22,6 +22,24 @@ class SimplifiedUI:
         )
         y_pos += 40
 
+        self.pause_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 20, 30)),
+            text='Pause', manager=manager, container=self.controls_panel
+        )
+        y_pos += 40
+
+        self.restart_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 20, 30)),
+            text='Restart', manager=manager, container=self.controls_panel
+        )
+        y_pos += 40
+
+        self.fast_forward_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 20, 30)),
+            text='Run 10 Gens Fast', manager=manager, container=self.controls_panel
+        )
+        y_pos += 40
+
         self.sliders = {}
         self.slider_labels = {}
         def create_slider(name, text, y, min_val, max_val, start_val, label_format):

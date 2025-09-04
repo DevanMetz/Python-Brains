@@ -29,7 +29,7 @@ GRID_COLOR, WALL_COLOR = (40, 40, 40), (100, 100, 100)
 UNIT_COLOR, TARGET_COLOR = (0, 150, 255), (0, 255, 0)
 
 class GameState(Enum):
-    SIMULATING, EDITING = 1, 2
+    SIMULATING, EDITING, PAUSED, FAST_FORWARDING = 1, 2, 3, 4
 
 def draw_game_world(surface, game):
     surface.fill(BLACK)
@@ -103,6 +103,8 @@ def main():
     step_counter = 0
     current_state = GameState.SIMULATING
     time_since_last_step, sps_counter, sps_timer, measured_sps = 0, 0, 0, 0
+    ff_generations_to_run = 0
+    ff_generations_completed = 0
 
     running = True
     while running:
@@ -115,8 +117,26 @@ def main():
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: running = False
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
                 if event.ui_element == ui.mode_button:
-                    current_state = GameState.EDITING if current_state == GameState.SIMULATING else GameState.SIMULATING
+                    if current_state == GameState.EDITING:
+                        current_state = GameState.SIMULATING
+                        ui.pause_button.set_text("Pause")
+                    else: # SIMULATING or PAUSED
+                        current_state = GameState.EDITING
                     ui.show_editor_ui() if current_state == GameState.EDITING else ui.show_simulation_ui()
+
+                elif event.ui_element == ui.pause_button:
+                    if current_state == GameState.SIMULATING:
+                        current_state = GameState.PAUSED
+                        ui.pause_button.set_text("Resume")
+                    elif current_state == GameState.PAUSED:
+                        current_state = GameState.SIMULATING
+                        ui.pause_button.set_text("Pause")
+
+                elif event.ui_element == ui.restart_button:
+                    game.restart()
+                    step_counter = 0
+                    current_state = GameState.SIMULATING
+                    ui.pause_button.set_text("Pause")
 
                 elif event.ui_element == ui.save_map_button:
                     save_map(game, SAVED_MAP_PATH)
@@ -138,6 +158,15 @@ def main():
                     # Reset step counter to apply changes to a fresh generation
                     step_counter = 0
 
+                elif event.ui_element == ui.fast_forward_button:
+                    if current_state == GameState.SIMULATING or current_state == GameState.PAUSED:
+                        current_state = GameState.FAST_FORWARDING
+                        ff_generations_to_run = 10
+                        ff_generations_completed = 0
+                        # Disable other simulation controls during fast forward
+                        ui.pause_button.disable()
+                        ui.restart_button.disable()
+
             ui_manager.process_events(event)
 
         ui.update_labels()
@@ -150,6 +179,21 @@ def main():
                 if buttons[0]: game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
                 elif buttons[2]: game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
                 elif buttons[1]: game.target = (grid_x, grid_y)
+
+        elif current_state == GameState.FAST_FORWARDING:
+            # Run one full generation as fast as possible, without rendering
+            for _ in range(game.steps_per_generation):
+                game.run_simulation_step()
+            game.evolve_population()
+            step_counter = 0
+
+            ff_generations_completed += 1
+
+            if ff_generations_completed >= ff_generations_to_run:
+                current_state = GameState.SIMULATING
+                # Re-enable buttons
+                ui.pause_button.enable()
+                ui.restart_button.enable()
 
         elif current_state == GameState.SIMULATING:
             time_since_last_step += time_delta
@@ -170,6 +214,12 @@ def main():
         screen.fill(pygame.Color("#202020"))
         draw_game_world(game_world_surface, game)
         screen.blit(game_world_surface, game_world_rect.topleft)
+
+        if current_state == GameState.FAST_FORWARDING:
+            progress_text = f"Fast Forwarding... Gen {game.generation + 1}/{game.generation - ff_generations_completed + ff_generations_to_run}"
+            text_surf = font.render(progress_text, True, WHITE, pygame.Color("#404040"))
+            text_rect = text_surf.get_rect(center=(game_world_rect.width / 2, game_world_rect.height / 2))
+            screen.blit(text_surf, text_rect)
 
         live_activations = None
         if game.fittest_brain and game.units:

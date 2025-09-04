@@ -111,6 +111,13 @@ class SimplifiedGame:
         if self.tile_map.grid_width > 25:
             for x in range(25, self.tile_map.grid_width - 5): self.tile_map.set_tile(x, 10, Tile.WALL)
 
+    def restart(self):
+        """Resets the simulation to its initial state with a new random population."""
+        self.generation = 0
+        self.fittest_brain = None
+        self._initialize_population()
+        print("Simulation restarted with a new random population.")
+
     def update_settings(self, settings):
         new_mlp_arch_str = settings.get('mlp_arch_str', self.mlp_arch_str)
         new_pop_size = int(settings.get('population_size', self.population_size))
@@ -160,7 +167,7 @@ class SimplifiedGame:
         self.update_simulation_with_results(results)
 
     def _run_step_gpu(self):
-        inputs_batch = np.array([self._get_unit_inputs(u) for u in self.units], dtype=np.float32)
+        inputs_batch = np.array([self._get_unit_inputs(u) for u in self.units], dtype=np.float16)
 
         outputs_batch = self.batch_processor.forward_batch(inputs_batch)
         if outputs_batch is None:
