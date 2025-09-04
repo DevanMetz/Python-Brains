@@ -147,7 +147,12 @@ def main():
     ff_generations_to_run, ff_generations_completed = 0, 0
     current_state = GameState.SIMULATING
     running = True
+
+    # Editor-specific state
+    editor_mode = 'brush' # 'brush', 'set_spawn', 'set_target'
     editing_brush_tile = Tile.WALL
+    tile_type_names = {v: k for k, v in ui.brush_map.items()}
+
 
     while running:
         time_delta = clock.tick(FPS) / 1000.0
@@ -165,9 +170,20 @@ def main():
                 ui_manager, ui, visualizer_panel, game_world_rect = setup_ui(event.w, event.h)
 
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                # Editor mode buttons
                 if event.ui_element in ui.brush_map:
+                    editor_mode = 'brush'
                     editing_brush_tile = ui.brush_map[event.ui_element]
+                    tile_name = [k.text for k, v in ui.brush_map.items() if v == editing_brush_tile][0]
+                    ui.selected_brush_label.set_text(f"Brush: {tile_name}")
+                elif event.ui_element == ui.set_spawn_button:
+                    editor_mode = 'set_spawn'
+                    ui.selected_brush_label.set_text("Mode: Set Spawn")
+                elif event.ui_element == ui.set_target_button:
+                    editor_mode = 'set_target'
+                    ui.selected_brush_label.set_text("Mode: Set Target")
 
+                # General buttons
                 settings = ui.get_current_settings()
                 if event.ui_element == ui.mode_button:
                     current_state = GameState.SIMULATING if current_state == GameState.EDITING else GameState.EDITING
@@ -188,6 +204,15 @@ def main():
                 elif event.ui_element == ui.apply_button:
                     game.update_settings(create_game_config_from_settings(settings))
                     step_counter = 0
+                elif event.ui_element == ui.reward_settings_button:
+                    if ui.reward_window is None:
+                         ui.create_reward_window(game)
+                elif hasattr(ui, 'apply_rewards_button') and event.ui_element == ui.apply_rewards_button:
+                    reward_settings = {name: entry.get_text() for name, entry in ui.reward_inputs.items()}
+                    game.update_settings(reward_settings)
+                    ui.reward_window.kill()
+                    ui.reward_window = None
+
                 elif event.ui_element == ui.fast_forward_button:
                     if current_state in [GameState.SIMULATING, GameState.PAUSED]:
                         current_state = GameState.FAST_FORWARDING
@@ -213,15 +238,27 @@ def main():
 
         elif current_state == GameState.EDITING:
             buttons, keys, (mx, my) = pygame.mouse.get_pressed(), pygame.key.get_pressed(), pygame.mouse.get_pos()
-            if game_world_rect.collidepoint(mx, my):
+            if game_world_rect.collidepoint(mx, my) and buttons[0]: # Left click
                 scaled_mx, scaled_my = mx * (game_world_surface.get_width() / game_world_rect.width), my * (game_world_surface.get_height() / game_world_rect.height)
                 grid_x, grid_y = int(scaled_mx // TILE_SIZE), int(scaled_my // TILE_SIZE)
-                if buttons[0] and (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]):
-                    game.spawn_point = (grid_x, grid_y)
-                elif buttons[0]: # Left-click draws with the selected brush
+
+                if editor_mode == 'brush':
                     game.tile_map.set_tile(grid_x, grid_y, editing_brush_tile)
-                elif buttons[2]: # Right-click erases
-                    game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
+                elif editor_mode == 'set_spawn':
+                    game.spawn_point = (grid_x, grid_y)
+                    editor_mode = 'brush' # Switch back to brush mode after setting
+                    tile_name = [k.text for k, v in ui.brush_map.items() if v == editing_brush_tile][0]
+                    ui.selected_brush_label.set_text(f"Brush: {tile_name}")
+                elif editor_mode == 'set_target':
+                    game.target = (grid_x, grid_y)
+                    editor_mode = 'brush'
+                    tile_name = [k.text for k, v in ui.brush_map.items() if v == editing_brush_tile][0]
+                    ui.selected_brush_label.set_text(f"Brush: {tile_name}")
+
+            elif game_world_rect.collidepoint(mx, my) and buttons[2]: # Right click always erases
+                scaled_mx, scaled_my = mx * (game_world_surface.get_width() / game_world_rect.width), my * (game_world_surface.get_height() / game_world_rect.height)
+                grid_x, grid_y = int(scaled_mx // TILE_SIZE), int(scaled_my // TILE_SIZE)
+                game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
 
         elif current_state == GameState.FAST_FORWARDING:
             for _ in range(settings['sim_length']): game.run_simulation_step()

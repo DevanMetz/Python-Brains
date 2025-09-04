@@ -69,9 +69,12 @@ class Enemy:
 class SimplifiedGame:
     def __init__(self, width=40, height=30, population_size=100, mlp_arch_str="16",
                  perception_radius=5, steps_per_gen=100, mutation_rate=0.05,
-                 proximity_bonus=1.0, exploration_bonus=0.0,
-                 proximity_func='Inverse Squared', exploration_func='Linear',
-                 attack_awareness_radius=2, static_grid=None):
+                 attack_awareness_radius=2, static_grid=None,
+                 # Reward function parameters
+                 reward_dropoff_full=100, penalty_death=-200, reward_gather=5,
+                 reward_move_to_resource=1, reward_move_to_dropoff=1,
+                 penalty_invalid_gather=-10, penalty_damage=-2,
+                 penalty_idle=-1, penalty_full_idle=-1):
         self.tile_map = TileMap(width, height, static_grid)
         self.units = []
         self.enemies = []
@@ -93,12 +96,19 @@ class SimplifiedGame:
         self.perception_radius = perception_radius
         self.steps_per_generation = steps_per_gen
         self.mutation_rate = mutation_rate
-        self.proximity_bonus = proximity_bonus
-        self.exploration_bonus = exploration_bonus
-        self.proximity_func = proximity_func
-        self.exploration_func = exploration_func
         self.attack_awareness_radius = attack_awareness_radius
         self.mlp_arch_str = mlp_arch_str
+
+        # Store reward parameters
+        self.reward_dropoff_full = reward_dropoff_full
+        self.penalty_death = penalty_death
+        self.reward_gather = reward_gather
+        self.reward_move_to_resource = reward_move_to_resource
+        self.reward_move_to_dropoff = reward_move_to_dropoff
+        self.penalty_invalid_gather = penalty_invalid_gather
+        self.penalty_damage = penalty_damage
+        self.penalty_idle = penalty_idle
+        self.penalty_full_idle = penalty_full_idle
 
         self._setup_mlp_arch(mlp_arch_str)
         self._initialize_map_objects()
@@ -188,11 +198,18 @@ class SimplifiedGame:
         self.perception_radius = int(settings.get('perception_radius', self.perception_radius))
         self.steps_per_generation = int(settings.get('steps_per_gen', self.steps_per_generation))
         self.mutation_rate = float(settings.get('mutation_rate', self.mutation_rate))
-        self.proximity_bonus = float(settings.get('proximity_bonus', self.proximity_bonus))
-        self.exploration_bonus = float(settings.get('exploration_bonus', self.exploration_bonus))
-        self.proximity_func = settings.get('proximity_func', self.proximity_func)
-        self.exploration_func = settings.get('exploration_func', self.exploration_func)
         self.attack_awareness_radius = int(settings.get('attack_awareness_radius', self.attack_awareness_radius))
+
+        # Update reward settings
+        self.reward_dropoff_full = float(settings.get('reward_dropoff_full', self.reward_dropoff_full))
+        self.penalty_death = float(settings.get('penalty_death', self.penalty_death))
+        self.reward_gather = float(settings.get('reward_gather', self.reward_gather))
+        self.reward_move_to_resource = float(settings.get('reward_move_to_resource', self.reward_move_to_resource))
+        self.reward_move_to_dropoff = float(settings.get('reward_move_to_dropoff', self.reward_move_to_dropoff))
+        self.penalty_invalid_gather = float(settings.get('penalty_invalid_gather', self.penalty_invalid_gather))
+        self.penalty_damage = float(settings.get('penalty_damage', self.penalty_damage))
+        self.penalty_idle = float(settings.get('penalty_idle', self.penalty_idle))
+        self.penalty_full_idle = float(settings.get('penalty_full_idle', self.penalty_full_idle))
 
     def run_simulation_step(self):
         if not self.units: return
@@ -225,18 +242,18 @@ class SimplifiedGame:
 
             # Add penalty for not returning to base when cargo is full
             if unit.cargo == unit.max_cargo and action != Action.MOVE_TO_DROPOFF:
-                unit.fitness_score -= 1
+                unit.fitness_score += self.penalty_full_idle
 
             # Movement actions
             if action == Action.MOVE_TO_RESOURCE:
-                if not unit.is_carrying: unit.fitness_score += 1 # Reward for correct intention
+                if not unit.is_carrying: unit.fitness_score += self.reward_move_to_resource
                 target_pos, _ = self._find_nearest_object(unit_pos, self.resource_locations)
                 if target_pos and (unit.goal_type != 'resource' or unit.goal_pos != target_pos):
                     unit.goal_type, unit.goal_pos = 'resource', target_pos
                     unit.current_path = find_path(self.tile_map, unit_pos, target_pos)
                     if unit.current_path: unit.current_path.pop(0) # Remove current position
             elif action == Action.MOVE_TO_DROPOFF:
-                if unit.is_carrying: unit.fitness_score += 1 # Reward for correct intention
+                if unit.is_carrying: unit.fitness_score += self.reward_move_to_dropoff
                 target_pos, _ = self._find_nearest_object(unit_pos, self.dropoff_locations)
                 if target_pos and (unit.goal_type != 'dropoff' or unit.goal_pos != target_pos):
                     unit.goal_type, unit.goal_pos = 'dropoff', target_pos
@@ -266,13 +283,13 @@ class SimplifiedGame:
                     unit.cargo += 1
                     unit.resources_collected += 1
                     unit.is_carrying = True
-                    unit.fitness_score += 5 # Reward for successful gather
+                    unit.fitness_score += self.reward_gather
                 else:
-                    unit.fitness_score -= 10 # Penalty for invalid gather action
+                    unit.fitness_score += self.penalty_invalid_gather
             elif action == Action.IDLE:
                 unit.current_path = []
                 if unit.cargo < unit.max_cargo:
-                    unit.fitness_score -= 1 # Penalty for being idle
+                    unit.fitness_score += self.penalty_idle
 
         # --- Step 3: Update Unit Positions from Paths ---
         results = []
@@ -300,7 +317,7 @@ class SimplifiedGame:
             # Handle death
             if unit.health <= 0 and not unit.is_dead:
                 unit.is_dead = True
-                unit.fitness_score -= 200 # Large penalty for dying
+                unit.fitness_score += self.penalty_death
                 continue # No other interactions for dead units
 
             # Handle resource drop-off
@@ -308,7 +325,7 @@ class SimplifiedGame:
                 _, dist_to_dropoff = self._find_nearest_object((unit.x, unit.y), self.dropoff_locations)
                 if dist_to_dropoff <= 1: # If at a dropoff point
                     if unit.cargo == unit.max_cargo:
-                        unit.fitness_score += 100 # Large reward for full delivery
+                        unit.fitness_score += self.reward_dropoff_full
 
                     unit.resources_deposited += unit.cargo
                     unit.cargo = 0 # Reset cargo after any delivery
@@ -333,7 +350,7 @@ class SimplifiedGame:
             for unit in living_units: # Only check against living units
                 if abs(unit.x - enemy.x) <= 1 and abs(unit.y - enemy.y) <= 1:
                     unit.health -= 1
-                    unit.fitness_score -= 2 # Penalty for taking damage
+                    unit.fitness_score += self.penalty_damage
 
     def _find_nearest_object(self, unit_pos, object_list):
         if not object_list:

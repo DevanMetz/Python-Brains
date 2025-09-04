@@ -84,16 +84,22 @@ class SimplifiedUI:
         y_pos += 40
         self.apply_button = pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
-            text='Apply Settings', manager=manager, container=self.controls_panel)
+            text='Apply Sim Settings', manager=manager, container=self.controls_panel)
         self.simulation_controls.extend([mlp_label, self.mlp_arch_input, self.apply_button])
         y_pos += 40
 
+        self.reward_settings_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
+            text='Reward Settings', manager=manager, container=self.controls_panel)
+        self.simulation_controls.append(self.reward_settings_button)
+        y_pos += 40
+
         # --- Editor Controls ---
-        editor_label = pygame_gui.elements.UILabel(
+        self.selected_brush_label = pygame_gui.elements.UILabel(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 20)),
-            text='--- Editor Brushes ---', manager=manager, container=self.controls_panel)
+            text='Brush: Wall', manager=manager, container=self.controls_panel)
         y_pos += 30
-        self.editor_controls.append(editor_label)
+        self.editor_controls.append(self.selected_brush_label)
 
         brushes = {
             "Wall": Tile.WALL, "Empty": Tile.EMPTY, "Resource": Tile.RESOURCE,
@@ -106,6 +112,17 @@ class SimplifiedUI:
             self.editor_controls.append(button)
             self.brush_map[button] = tile
             y_pos += 40
+
+        y_pos += 10
+        self.set_spawn_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
+            text='Set Spawn Point', manager=manager, container=self.controls_panel)
+        y_pos += 40
+        self.set_target_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
+            text='Set Target Point', manager=manager, container=self.controls_panel)
+        y_pos += 40
+        self.editor_controls.extend([self.set_spawn_button, self.set_target_button])
 
         self.save_map_button = pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((10, y_pos), (rect.width - 40, 30)),
@@ -152,3 +169,42 @@ class SimplifiedUI:
             control.hide()
         for control in self.editor_controls:
             control.show()
+
+    def create_reward_window(self, game):
+        window_rect = pygame.Rect((100, 100), (350, 480))
+        self.reward_window = pygame_gui.elements.UIWindow(
+            rect=window_rect, manager=self.manager, window_display_title="Reward Settings"
+        )
+
+        y_pos = 10
+        self.reward_inputs = {}
+
+        reward_params = [
+            ('reward_dropoff_full', "Dropoff (Full):", game.reward_dropoff_full),
+            ('penalty_death', "Death:", game.penalty_death),
+            ('reward_gather', "Gather:", game.reward_gather),
+            ('reward_move_to_resource', "Move to Resource:", game.reward_move_to_resource),
+            ('reward_move_to_dropoff', "Move to Dropoff:", game.reward_move_to_dropoff),
+            ('penalty_invalid_gather', "Invalid Gather:", game.penalty_invalid_gather),
+            ('penalty_damage', "Damage Taken:", game.penalty_damage),
+            ('penalty_idle', "Idle:", game.penalty_idle),
+            ('penalty_full_idle', "Idle (Full Cargo):", game.penalty_full_idle)
+        ]
+
+        for name, text, current_val in reward_params:
+            pygame_gui.elements.UILabel(
+                relative_rect=pygame.Rect(10, y_pos, 150, 25),
+                text=text, manager=self.manager, container=self.reward_window)
+
+            entry = pygame_gui.elements.UITextEntryLine(
+                relative_rect=pygame.Rect(170, y_pos, 150, 25),
+                manager=self.manager, container=self.reward_window)
+
+            entry.set_text(str(current_val))
+            self.reward_inputs[name] = entry
+            y_pos += 40
+
+        self.apply_rewards_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(10, y_pos, 150, 30),
+            text="Apply Rewards", manager=self.manager, container=self.reward_window
+        )
