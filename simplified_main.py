@@ -16,6 +16,7 @@ GRID_WIDTH, GRID_HEIGHT = 50, 30
 TILE_SIZE = 20
 UI_WIDTH = 220
 VISUALIZER_HEIGHT = 250
+# These are now initial values, they will change if the window is resized
 SCREEN_WIDTH = GRID_WIDTH * TILE_SIZE + UI_WIDTH
 SCREEN_HEIGHT = GRID_HEIGHT * TILE_SIZE + VISUALIZER_HEIGHT
 FPS = 60
@@ -71,7 +72,6 @@ def load_or_create_default_map():
         return temp_game.tile_map.static_grid
 
 def create_game_config_from_settings(settings):
-    """Converts UI settings into a configuration for SimplifiedGame."""
     config = settings.copy()
     if 'vision_radius' in config:
         config['perception_radius'] = config.pop('vision_radius')
@@ -82,20 +82,28 @@ def create_game_config_from_settings(settings):
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Simplified CPU Simulation")
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
+    pygame.display.set_caption("Simplified Brains Simulation")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("Arial", 18)
 
-    game_world_rect = pygame.Rect(0, 0, GRID_WIDTH * TILE_SIZE, GRID_HEIGHT * TILE_SIZE)
-    controls_panel_rect = pygame.Rect(game_world_rect.right, 0, UI_WIDTH, SCREEN_HEIGHT - VISUALIZER_HEIGHT)
-    visualizer_panel_rect = pygame.Rect(0, game_world_rect.bottom, SCREEN_WIDTH, VISUALIZER_HEIGHT)
+    # Fixed size for the simulation surface itself
+    game_world_surface = pygame.Surface((GRID_WIDTH * TILE_SIZE, GRID_HEIGHT * TILE_SIZE))
 
-    ui_manager = pygame_gui.UIManager((SCREEN_WIDTH, SCREEN_HEIGHT))
-    ui = SimplifiedUI(rect=controls_panel_rect, manager=ui_manager)
-    visualizer_panel = pygame_gui.elements.UIPanel(relative_rect=visualizer_panel_rect, manager=ui_manager)
+    # UI setup function
+    def setup_ui(width, height):
+        manager = pygame_gui.UIManager((width, height))
 
-    game_world_surface = pygame.Surface(game_world_rect.size)
+        game_world_rect = pygame.Rect(0, 0, width - UI_WIDTH, height - VISUALIZER_HEIGHT)
+        controls_panel_rect = pygame.Rect(game_world_rect.right, 0, UI_WIDTH, height - VISUALIZER_HEIGHT)
+        visualizer_panel_rect = pygame.Rect(0, game_world_rect.bottom, width, VISUALIZER_HEIGHT)
+
+        ui = SimplifiedUI(rect=controls_panel_rect, manager=manager)
+        visualizer_panel = pygame_gui.elements.UIPanel(relative_rect=visualizer_panel_rect, manager=manager)
+
+        return manager, ui, visualizer_panel, game_world_rect
+
+    ui_manager, ui, visualizer_panel, game_world_rect = setup_ui(SCREEN_WIDTH, SCREEN_HEIGHT)
 
     default_map = load_or_create_default_map()
     game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=default_map)
@@ -109,12 +117,21 @@ def main():
     running = True
     while running:
         time_delta = clock.tick(FPS) / 1000.0
-        sps_timer += time_delta
-        settings = ui.get_current_settings()
+
+        # We get settings here, but they are only applied on button press
+        # If the UI is recreated, get_current_settings might fail if called before ui.update
+        # It's safer to get settings after processing events.
 
         for event in pygame.event.get():
-            if event.type == pygame.QUIT: running = False
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: running = False
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                running = False
+
+            if event.type == pygame.VIDEORESIZE:
+                screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
+                ui_manager, ui, visualizer_panel, game_world_rect = setup_ui(event.w, event.h)
+
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
                 if event.ui_element == ui.mode_button:
                     if current_state == GameState.EDITING:
@@ -145,59 +162,60 @@ def main():
                     loaded_map = load_map(SAVED_MAP_PATH)
                     if loaded_map is not None:
                         current_target = game.target
+                        settings = ui.get_current_settings()
                         game_config = create_game_config_from_settings(settings)
-                        game = SimplifiedGame(
-                            width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=loaded_map,
-                            **game_config)
+                        game = SimplifiedGame(width=GRID_WIDTH, height=GRID_HEIGHT, static_grid=loaded_map, **game_config)
                         game.target = current_target
                         step_counter = 0
 
                 elif event.ui_element == ui.apply_button:
+                    settings = ui.get_current_settings()
                     game_config = create_game_config_from_settings(settings)
                     game.update_settings(game_config)
-                    # Reset step counter to apply changes to a fresh generation
                     step_counter = 0
 
                 elif event.ui_element == ui.fast_forward_button:
-                    if current_state == GameState.SIMULATING or current_state == GameState.PAUSED:
+                    if current_state in [GameState.SIMULATING, GameState.PAUSED]:
                         current_state = GameState.FAST_FORWARDING
                         ff_generations_to_run = 10
                         ff_generations_completed = 0
-                        # Disable other simulation controls during fast forward
                         ui.pause_button.disable()
                         ui.restart_button.disable()
 
             ui_manager.process_events(event)
 
+        ui_manager.update(time_delta)
         ui.update_labels()
+
+        # Get settings after events are processed
+        settings = ui.get_current_settings()
 
         if current_state == GameState.EDITING:
             buttons = pygame.mouse.get_pressed()
             mx, my = pygame.mouse.get_pos()
             if game_world_rect.collidepoint(mx, my):
-                grid_x, grid_y = mx // TILE_SIZE, my // TILE_SIZE
+                # Convert screen coordinates to game world surface coordinates
+                scaled_mx = mx * (game_world_surface.get_width() / game_world_rect.width)
+                scaled_my = my * (game_world_surface.get_height() / game_world_rect.height)
+                grid_x, grid_y = int(scaled_mx // TILE_SIZE), int(scaled_my // TILE_SIZE)
                 if buttons[0]: game.tile_map.set_tile(grid_x, grid_y, Tile.WALL)
                 elif buttons[2]: game.tile_map.set_tile(grid_x, grid_y, Tile.EMPTY)
                 elif buttons[1]: game.target = (grid_x, grid_y)
 
         elif current_state == GameState.FAST_FORWARDING:
-            # Run one full generation as fast as possible, without rendering
             for _ in range(game.steps_per_generation):
                 game.run_simulation_step()
             game.evolve_population()
             step_counter = 0
-
             ff_generations_completed += 1
-
             if ff_generations_completed >= ff_generations_to_run:
                 current_state = GameState.SIMULATING
-                # Re-enable buttons
                 ui.pause_button.enable()
                 ui.restart_button.enable()
 
         elif current_state == GameState.SIMULATING:
             time_since_last_step += time_delta
-            step_interval = 1.0 / settings['sps']
+            step_interval = 1.0 / settings['sps'] if settings['sps'] > 0 else 0
             while time_since_last_step >= step_interval:
                 if step_counter < game.steps_per_generation:
                     game.run_simulation_step()
@@ -212,33 +230,27 @@ def main():
             measured_sps, sps_counter, sps_timer = sps_counter, 0, 0
 
         screen.fill(pygame.Color("#202020"))
+
+        # Draw game world to its own surface, then scale it to the screen
         draw_game_world(game_world_surface, game)
-        screen.blit(game_world_surface, game_world_rect.topleft)
+        screen.blit(pygame.transform.scale(game_world_surface, game_world_rect.size), game_world_rect.topleft)
 
         if current_state == GameState.FAST_FORWARDING:
-            progress_text = f"Fast Forwarding... Gen {game.generation + 1}/{game.generation - ff_generations_completed + ff_generations_to_run}"
+            progress_text = f"Fast Forwarding... Gen {game.generation}/{game.generation - ff_generations_completed + ff_generations_to_run}"
             text_surf = font.render(progress_text, True, WHITE, pygame.Color("#404040"))
-            text_rect = text_surf.get_rect(center=(game_world_rect.width / 2, game_world_rect.height / 2))
+            text_rect = text_surf.get_rect(center=screen.get_rect().center)
             screen.blit(text_surf, text_rect)
 
-        live_activations = None
-        if game.fittest_brain and game.units:
-            fittest_unit = game.units[0]
-            vision_inputs = get_vision_inputs(fittest_unit.x, fittest_unit.y, game.tile_map.static_grid, settings['vision_radius'])
-            dx_to_target = (game.target[0] - fittest_unit.x) / game.tile_map.grid_width
-            dy_to_target = (game.target[1] - fittest_unit.y) / game.tile_map.grid_height
-            target_inputs = np.array([dx_to_target, dy_to_target])
-            inputs = np.concatenate((vision_inputs, target_inputs))
-            # The fittest brain is a standard MLP, which always returns activations
+        if game.fittest_brain:
+            inputs = game._get_unit_inputs(game.units[0])
             _, live_activations = game.fittest_brain.forward(inputs)
-        ui.draw_fittest_brain(visualizer_panel.image, game.fittest_brain, live_activations)
+            ui.draw_fittest_brain(visualizer_panel.image, game.fittest_brain, live_activations)
 
         fps_text = font.render(f"FPS: {int(clock.get_fps())}", True, WHITE)
         sps_text = font.render(f"SPS: {measured_sps}", True, WHITE)
         screen.blit(fps_text, (10, 10))
         screen.blit(sps_text, (10, 30))
 
-        ui_manager.update(time_delta)
         ui_manager.draw_ui(screen)
         pygame.display.flip()
 
