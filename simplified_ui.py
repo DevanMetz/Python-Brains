@@ -140,7 +140,7 @@ class SimplifiedUI:
         self.controls_panel.set_scrollable_area_dimensions((rect.width - 30, y_pos))
 
         # --- Editor UI ---
-        self.editor_panel = pygame_gui.elements.UIPanel(
+        self.editor_panel = pygame_gui.elements.UIScrollingContainer(
             relative_rect=rect, manager=manager, visible=False
         )
         editor_y = 10
