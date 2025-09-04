@@ -14,6 +14,7 @@ class SimplifiedUI:
         self.simulation_controls = []
         self.editor_controls = []
         self.brush_map = {}
+        self.reward_window = None
 
         self.controls_panel = pygame_gui.elements.UIScrollingContainer(
             relative_rect=rect, manager=manager
