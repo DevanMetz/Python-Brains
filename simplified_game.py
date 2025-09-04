@@ -21,6 +21,10 @@ class TileMap:
         else:
             self.static_grid = np.full((self.grid_width, self.grid_height), Tile.EMPTY.value, dtype=int)
 
+    def set_tile(self, x, y, tile_type: Tile):
+        if 0 <= x < self.grid_width and 0 <= y < self.grid_height:
+            self.static_grid[x, y] = tile_type.value
+
     def is_wall(self, x, y):
         if 0 <= x < self.grid_width and 0 <= y < self.grid_height:
             return self.static_grid[x, y] == Tile.WALL.value
@@ -91,6 +95,8 @@ class SimplifiedGame:
     def _create_walls(self):
         if self.tile_map.grid_width > 20:
             for y in range(5, self.tile_map.grid_height - 5): self.tile_map.set_tile(20, y, Tile.WALL)
+        if self.tile_map.grid_width > 25:
+            for x in range(25, self.tile_map.grid_width - 5): self.tile_map.set_tile(x, 10, Tile.WALL)
 
     def restart(self):
         self.generation = 0
