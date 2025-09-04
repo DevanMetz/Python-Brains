@@ -102,7 +102,7 @@ class SimplifiedGame:
         self.units = []
         start_x, start_y = 5, self.tile_map.grid_height // 2
         for i in range(self.population_size):
-            self.units.append(SimplifiedUnit(i, start_x, start_y, self.mlp_class(self.mlp_arch, verbose=True)))
+            self.units.append(SimplifiedUnit(i, start_x, start_y, self.mlp_class(self.mlp_arch)))
         self.tile_map.update_dynamic_grid(self.units, self.target)
 
     def _create_walls(self):

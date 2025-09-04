@@ -60,6 +60,7 @@ if OPENCL_AVAILABLE:
 
             # Build the OpenCL kernel
             self.prg = cl.Program(self.ctx, self._opencl_kernel_code).build()
+            self.forward_pass_kernel = self.prg.forward_pass
 
         def _disable_opencl(self):
             """Disables OpenCL functionality for this instance."""
@@ -88,10 +89,10 @@ if OPENCL_AVAILABLE:
 
                 output_gpu = cl_array.empty(self.queue, (1, output_size), dtype=np.float32)
 
-                self.prg.forward_pass(self.queue,
-                                      (output_size,),
-                                      None,
-                                      current_layer_output_gpu.data,
+                self.forward_pass_kernel(self.queue,
+                                         (output_size,),
+                                         None,
+                                         current_layer_output_gpu.data,
                                       self.weights_gpu[i].data,
                                       self.biases_gpu[i].data,
                                       output_gpu.data,
