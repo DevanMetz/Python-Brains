@@ -14,9 +14,10 @@ class MLP(nn.Module):
         :param output_size: The number of possible actions.
         """
         super(MLP, self).__init__()
-        self.layer1 = nn.Linear(input_size, 128)
-        self.layer2 = nn.Linear(128, 128)
-        self.layer3 = nn.Linear(128, output_size)
+        hidden_size = 16  # Reduced for better visualization
+        self.layer1 = nn.Linear(input_size, hidden_size)
+        self.layer2 = nn.Linear(hidden_size, hidden_size)
+        self.layer3 = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
         """

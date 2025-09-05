@@ -20,10 +20,16 @@ import torch.optim as optim
 import random
 from collections import deque
 from agent import MLP
+from visualization import MLPVisualizer
+
+import pygame_gui
+
 
 # --- Constants ---
-SCREEN_WIDTH = 800
+SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 600
+SIMULATION_PANEL_WIDTH = 800
+MLP_PANEL_WIDTH = SCREEN_WIDTH - SIMULATION_PANEL_WIDTH
 BACKGROUND_COLOR = (0, 0, 0)  # Black
 
 # Colors for our objects
@@ -53,9 +59,9 @@ epsilon = EPSILON_START
 def get_state(unit, reward, obstacle):
     """Gathers the state of the game into a tensor."""
     state = [
-        unit.x / SCREEN_WIDTH, unit.y / SCREEN_HEIGHT,
-        reward.x / SCREEN_WIDTH, reward.y / SCREEN_HEIGHT,
-        obstacle.x / SCREEN_WIDTH, obstacle.y / SCREEN_HEIGHT
+        unit.x / SIMULATION_PANEL_WIDTH, unit.y / SCREEN_HEIGHT,
+        reward.x / SIMULATION_PANEL_WIDTH, reward.y / SCREEN_HEIGHT,
+        obstacle.x / SIMULATION_PANEL_WIDTH, obstacle.y / SCREEN_HEIGHT
     ]
     return torch.FloatTensor(state).unsqueeze(0)
 
@@ -72,93 +78,103 @@ def main():
     """Main function to run the simulation."""
     global epsilon
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    window_surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
     pygame.display.set_caption("RTS MLP Simulation")
+    background_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+    background_surface.fill(pygame.Color('#101010'))
+
+    # --- GUI Setup ---
+    theme_path = os.path.join(os.path.dirname(__file__), 'theme.json')
+    ui_manager = pygame_gui.UIManager((SCREEN_WIDTH, SCREEN_HEIGHT), theme_path)
+    sim_panel = pygame_gui.elements.UIPanel(
+        relative_rect=pygame.Rect((0, 0), (SIMULATION_PANEL_WIDTH, SCREEN_HEIGHT)),
+        manager=ui_manager,
+        anchors={'left': 'left', 'right': 'left', 'top': 'top', 'bottom': 'bottom'}
+    )
+    mlp_panel = pygame_gui.elements.UIPanel(
+        relative_rect=pygame.Rect((SIMULATION_PANEL_WIDTH, 0), (MLP_PANEL_WIDTH, SCREEN_HEIGHT)),
+        manager=ui_manager,
+        anchors={'left': 'left', 'right': 'right', 'top': 'top', 'bottom': 'bottom'}
+    )
+    # Note: True resizability requires handling pygame.VIDEORESIZE events and updating panel rects,
+    # which is complex. The anchoring provides basic resizing with the main window.
+
+    mlp_visualizer = MLPVisualizer(model)
     clock = pygame.time.Clock()
 
+    # --- Game Objects (coordinates are relative to the sim_panel) ---
     unit = pygame.Rect(100, 300, 25, 25)
-    reward = pygame.Rect(700, 300, 20, 20)
-    obstacle = pygame.Rect(400, 250, 50, 100)
+    reward = pygame.Rect(600, 300, 20, 20) # Adjusted for 800 width
+    obstacle = pygame.Rect(350, 250, 50, 100) # Adjusted for 800 width
 
-    # --- Logging and Episode Tracking ---
-    episode = 0
-    total_reward = 0
-    frame_count = 0
+    episode, total_reward, frame_count = 0, 0, 0
     running = True
-
     while running:
+        time_delta = clock.tick(60) / 1000.0
         frame_count += 1
+
+        # --- Event Handling ---
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            if event.type == pygame.VIDEORESIZE:
+                # This event is crucial for making the layout truly resizable
+                ui_manager.set_window_resolution((event.w, event.h))
+                background_surface = pygame.Surface((event.w, event.h))
+                background_surface.fill(pygame.Color('#101010'))
+            ui_manager.process_events(event)
 
         # --- Agent's Turn ---
-        # 1. Get current state
         current_state = get_state(unit, reward, obstacle)
-
-        # 2. Select an action
         action = select_action(current_state)
 
-        # 3. Perform action
-        if action == 0: # Up
-            unit.y -= UNIT_SPEED
-        elif action == 1: # Down
-            unit.y += UNIT_SPEED
-        elif action == 2: # Left
-            unit.x -= UNIT_SPEED
-        elif action == 3: # Right
-            unit.x += UNIT_SPEED
+        if action == 0: unit.y -= UNIT_SPEED
+        elif action == 1: unit.y += UNIT_SPEED
+        elif action == 2: unit.x -= UNIT_SPEED
+        elif action == 3: unit.x += UNIT_SPEED
 
-        # 4. Observe reward and next state
-        reward_val = -0.1  # Small penalty for each step to encourage speed
+        # --- Observe and Train ---
+        reward_val = -0.1
         done = False
         if unit.colliderect(reward):
-            reward_val = 10.0  # Big reward for reaching the goal
-            done = True
-        elif unit.colliderect(obstacle) or unit.left < 0 or unit.right > SCREEN_WIDTH or unit.top < 0 or unit.bottom > SCREEN_HEIGHT:
-            reward_val = -10.0 # Big penalty for crashing
-            done = True
-
+            reward_val, done = 10.0, True
+        elif unit.colliderect(obstacle) or unit.left < 0 or unit.right > SIMULATION_PANEL_WIDTH or unit.top < 0 or unit.bottom > SCREEN_HEIGHT:
+            reward_val, done = -10.0, True
         if frame_count >= MAX_FRAMES_PER_EPISODE:
-            reward_val = -5.0 # Penalty for timing out
-            done = True
+            reward_val, done = -5.0, True
 
         next_state = get_state(unit, reward, obstacle)
-
-        # 5. Store experience in memory
         memory.append((current_state, action, reward_val, next_state, done))
-
-        # 6. Train the model
         train_step()
 
-        # Update reward tracking
+        # --- Episode Management ---
         total_reward += reward_val
-
-        # Handle end of episode
         if done:
             episode += 1
-            print(f"Episode: {episode}, Total Reward: {total_reward:.2f}, Epsilon: {epsilon:.4f}, Frames: {frame_count}")
-            total_reward = 0 # Reset for next episode
-            frame_count = 0 # Reset frame count
+            print(f"Episode: {episode}, Reward: {total_reward:.2f}, Epsilon: {epsilon:.4f}")
+            total_reward, frame_count = 0, 0
+            unit.x, unit.y = 100, 300
 
-            unit.x, unit.y = 100, 300 # Reset unit
-            # Optionally, reset obstacle and reward positions for more robust training
-            # reward.x = random.randint(50, SCREEN_WIDTH - 50)
-            # reward.y = random.randint(50, SCREEN_HEIGHT - 50)
-
-        # --- Drawing ---
-        screen.fill(BACKGROUND_COLOR)
-        pygame.draw.rect(screen, UNIT_COLOR, unit)
-        pygame.draw.rect(screen, REWARD_COLOR, reward)
-        pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle)
-        pygame.display.flip()
-
-        # Decay epsilon
         if epsilon > EPSILON_END:
             epsilon *= EPSILON_DECAY
 
-        clock.tick(60) # Limit frame rate
+        # --- Drawing ---
+        ui_manager.update(time_delta)
+        window_surface.blit(background_surface, (0, 0))
 
+        # Draw simulation on its panel
+        sim_panel.image.fill(BACKGROUND_COLOR)
+        pygame.draw.rect(sim_panel.image, UNIT_COLOR, unit)
+        pygame.draw.rect(sim_panel.image, REWARD_COLOR, reward)
+        pygame.draw.rect(sim_panel.image, OBSTACLE_COLOR, obstacle)
+
+        # Draw MLP viz on its panel
+        mlp_visualizer.draw(mlp_panel.image)
+
+        ui_manager.draw_ui(window_surface)
+        pygame.display.update()
+
+    mlp_visualizer.remove_hooks()
     pygame.quit()
     sys.exit()
 
@@ -194,24 +210,51 @@ def train_step():
     optimizer.step()
 
 def take_screenshot(filename):
-    """Initializes the environment, draws one frame, and saves it to a file."""
-    print(f"Taking screenshot and saving to {filename}...")
+    """Initializes the full UI, draws one frame, and saves it to a file."""
+    print(f"Taking screenshot of initial state and saving to {filename}...")
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    window_surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 
-    # Create the objects in their initial state
+    # --- GUI Setup ---
+    theme_path = os.path.join(os.path.dirname(__file__), 'theme.json')
+    ui_manager = pygame_gui.UIManager((SCREEN_WIDTH, SCREEN_HEIGHT), theme_path)
+    sim_panel = pygame_gui.elements.UIPanel(
+        relative_rect=pygame.Rect((0, 0), (SIMULATION_PANEL_WIDTH, SCREEN_HEIGHT)),
+        manager=ui_manager)
+    mlp_panel = pygame_gui.elements.UIPanel(
+        relative_rect=pygame.Rect((SIMULATION_PANEL_WIDTH, 0), (MLP_PANEL_WIDTH, SCREEN_HEIGHT)),
+        manager=ui_manager)
+
+    # --- Model and Visualizer ---
+    mlp_visualizer = MLPVisualizer(model)
+
+    # --- Game Objects ---
     unit = pygame.Rect(100, 300, 25, 25)
-    reward = pygame.Rect(700, 300, 20, 20)
-    obstacle = pygame.Rect(400, 250, 50, 100)
+    reward = pygame.Rect(600, 300, 20, 20)
+    obstacle = pygame.Rect(350, 250, 50, 100)
 
-    # Draw the scene
-    screen.fill(BACKGROUND_COLOR)
-    pygame.draw.rect(screen, UNIT_COLOR, unit)
-    pygame.draw.rect(screen, REWARD_COLOR, reward)
-    pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle)
+    # --- Trigger one forward pass to populate hooks ---
+    initial_state = get_state(unit, reward, obstacle)
+    with torch.no_grad():
+        model(initial_state)
 
-    # Save the buffer to a file
-    pygame.image.save(screen, filename)
+    # --- Drawing ---
+    # Draw simulation
+    sim_panel.image.fill(BACKGROUND_COLOR)
+    pygame.draw.rect(sim_panel.image, UNIT_COLOR, unit)
+    pygame.draw.rect(sim_panel.image, REWARD_COLOR, reward)
+    pygame.draw.rect(sim_panel.image, OBSTACLE_COLOR, obstacle)
+
+    # Draw MLP visualization
+    mlp_visualizer.draw(mlp_panel.image)
+
+    # Update and draw the entire UI
+    ui_manager.update(0)
+    ui_manager.draw_ui(window_surface)
+
+    # Save the final surface
+    pygame.image.save(window_surface, filename)
+    mlp_visualizer.remove_hooks()
     pygame.quit()
     print("Screenshot saved.")
 
