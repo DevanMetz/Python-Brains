@@ -176,7 +176,7 @@ def main():
         mlp_visualizer.draw(mlp_panel.image)
 
         ui_manager.draw_ui(window_surface)
-        pygame.display.update()
+        pygame.display.flip()
 
     mlp_visualizer.remove_hooks()
     pygame.quit()
@@ -213,15 +213,19 @@ def train_step():
     loss.backward()
     optimizer.step()
 
-def take_screenshot(filename):
-    """Initializes the full UI, draws one frame, and saves it to a file."""
-    print(f"Taking screenshot of initial state and saving to {filename}...")
+def take_screenshot(filename, frames_to_run=120):
+    """Initializes the app, runs the main loop for a number of frames, then saves a screenshot."""
+    print(f"Running simulation for {frames_to_run} frames and then taking screenshot...")
+
+    # --- Initialization (mirrors main()) ---
+    global epsilon
     pygame.init()
     window_surface = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    pygame.display.set_caption("RTS MLP Simulation")
 
-    # --- GUI Setup ---
     theme_path = os.path.join(os.path.dirname(__file__), 'theme.json')
     ui_manager = pygame_gui.UIManager((SCREEN_WIDTH, SCREEN_HEIGHT), theme_path)
+
     sim_panel = pygame_gui.elements.UIPanel(
         relative_rect=pygame.Rect((0, 0), (SCREEN_WIDTH, SIMULATION_PANEL_HEIGHT)),
         manager=ui_manager)
@@ -229,34 +233,53 @@ def take_screenshot(filename):
         relative_rect=pygame.Rect((0, SIMULATION_PANEL_HEIGHT), (SCREEN_WIDTH, MLP_PANEL_HEIGHT)),
         manager=ui_manager)
 
-    # --- Model and Visualizer ---
     mlp_visualizer = MLPVisualizer(model)
+    clock = pygame.time.Clock()
 
-    # --- Game Objects ---
     unit = pygame.Rect(100, 250, 25, 25)
     reward = pygame.Rect(700, 250, 20, 20)
     obstacle = pygame.Rect(400, 150, 50, 100)
 
-    # --- Trigger one forward pass to populate hooks ---
-    initial_state = get_state(unit, reward, obstacle)
-    with torch.no_grad():
-        model(initial_state)
+    # --- Timed Main Loop ---
+    for frame_num in range(frames_to_run):
+        time_delta = clock.tick(60) / 1000.0
 
-    # --- Drawing ---
-    # Draw simulation
-    sim_panel.image.fill(BACKGROUND_COLOR)
-    pygame.draw.rect(sim_panel.image, UNIT_COLOR, unit)
-    pygame.draw.rect(sim_panel.image, REWARD_COLOR, reward)
-    pygame.draw.rect(sim_panel.image, OBSTACLE_COLOR, obstacle)
+        # Limited event processing for headless mode
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                break
+            ui_manager.process_events(event)
+            mlp_visualizer.handle_event(event, mlp_panel.get_abs_rect())
 
-    # Draw MLP visualization
-    mlp_visualizer.draw(mlp_panel.image)
+        # Agent logic
+        current_state = get_state(unit, reward, obstacle)
+        action = select_action(current_state)
+        if action == 0: unit.y -= UNIT_SPEED
+        elif action == 1: unit.y += UNIT_SPEED
+        elif action == 2: unit.x -= UNIT_SPEED
+        elif action == 3: unit.x += UNIT_SPEED
 
-    # Update and draw the entire UI
-    ui_manager.update(0)
-    ui_manager.draw_ui(window_surface)
+        # Training logic (simplified for screenshot)
+        next_state = get_state(unit, reward, obstacle)
+        # A minimal reward/done logic to keep it running
+        done = unit.colliderect(reward) or unit.colliderect(obstacle)
+        reward_val = 1 if unit.colliderect(reward) else -1 if unit.colliderect(obstacle) else -0.1
+        memory.append((current_state, action, reward_val, next_state, done))
+        train_step()
+        if done:
+            unit.x, unit.y = 100, 250
 
-    # Save the final surface
+        # Drawing (Corrected: now inside the loop)
+        ui_manager.update(time_delta)
+        sim_panel.image.fill(BACKGROUND_COLOR)
+        pygame.draw.rect(sim_panel.image, UNIT_COLOR, unit)
+        pygame.draw.rect(sim_panel.image, REWARD_COLOR, reward)
+        pygame.draw.rect(sim_panel.image, OBSTACLE_COLOR, obstacle)
+        mlp_visualizer.draw(mlp_panel.image)
+        ui_manager.draw_ui(window_surface)
+        pygame.display.flip()
+
+    # --- Final Capture ---
     pygame.image.save(window_surface, filename)
     mlp_visualizer.remove_hooks()
     pygame.quit()
