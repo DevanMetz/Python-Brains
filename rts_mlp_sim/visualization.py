@@ -90,9 +90,15 @@ class MLPVisualizer:
                 self.offset.x += event.rel[0] / self.zoom
                 self.offset.y += event.rel[1] / self.zoom
 
-    def draw(self, surface):
+    def draw(self, surface, frame_count):
         """Draws the visualization of the network on the given surface."""
         surface.fill((20, 20, 30))
+
+        # --- Diagnostic Logging ---
+        if frame_count % 60 == 0:
+            print("\n--- MLP VISUALIZER DIAGNOSTIC (Frame {}) ---".format(frame_count))
+            print("Camera State: zoom={:.2f}, offset=({}, {})".format(self.zoom, self.offset.x, self.offset.y))
+            print("Activation Data Captured: {}".format(bool(self.activations)))
 
         layers = [self.model.layer1, self.model.layer2, self.model.layer3]
         layer_sizes = [layers[0].in_features] + [l.out_features for l in layers]
@@ -137,6 +143,8 @@ class MLPVisualizer:
         # Draw input nodes
         for j, pos_world in enumerate(node_positions[0]):
             pos_screen = self.world_to_screen(pos_world.x, pos_world.y, surface)
+            if frame_count % 60 == 0 and j == 0: # Log first input neuron
+                print("First Input Neuron Screen Coords: ({}, {})".format(pos_screen.x, pos_screen.y))
             try:
                 activation = self.activations['layer1_input'][0][j]
             except (KeyError, IndexError):
@@ -153,6 +161,9 @@ class MLPVisualizer:
 
                 for j, pos_world in enumerate(node_positions[i+1]):
                     pos_screen = self.world_to_screen(pos_world.x, pos_world.y, surface)
+                    if frame_count % 60 == 0 and i == 2 and j == 0: # Log first output neuron
+                        print("First Output Neuron Screen Coords: ({}, {})".format(pos_screen.x, pos_screen.y))
+                        print("Panel Dims: {}".format(surface.get_size()))
                     activation = activations[j]
                     color_val = int(255 * min(1.0, abs(activation) / max_act))
                     pygame.draw.circle(surface, (0, color_val, color_val), pos_screen, node_radius)

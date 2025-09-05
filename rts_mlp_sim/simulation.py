@@ -173,7 +173,7 @@ def main():
         pygame.draw.rect(sim_panel.image, OBSTACLE_COLOR, obstacle)
 
         # Draw MLP viz on its panel
-        mlp_visualizer.draw(mlp_panel.image)
+        mlp_visualizer.draw(mlp_panel.image, frame_count)
 
         ui_manager.draw_ui(window_surface)
         pygame.display.flip()
