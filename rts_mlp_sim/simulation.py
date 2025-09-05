@@ -26,10 +26,10 @@ import pygame_gui
 
 
 # --- Constants ---
-SCREEN_WIDTH = 1200
-SCREEN_HEIGHT = 600
-SIMULATION_PANEL_WIDTH = 800
-MLP_PANEL_WIDTH = SCREEN_WIDTH - SIMULATION_PANEL_WIDTH
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 800
+SIMULATION_PANEL_HEIGHT = 500
+MLP_PANEL_HEIGHT = SCREEN_HEIGHT - SIMULATION_PANEL_HEIGHT
 BACKGROUND_COLOR = (0, 0, 0)  # Black
 
 # Colors for our objects
@@ -59,9 +59,9 @@ epsilon = EPSILON_START
 def get_state(unit, reward, obstacle):
     """Gathers the state of the game into a tensor."""
     state = [
-        unit.x / SIMULATION_PANEL_WIDTH, unit.y / SCREEN_HEIGHT,
-        reward.x / SIMULATION_PANEL_WIDTH, reward.y / SCREEN_HEIGHT,
-        obstacle.x / SIMULATION_PANEL_WIDTH, obstacle.y / SCREEN_HEIGHT
+        unit.x / SCREEN_WIDTH, unit.y / SIMULATION_PANEL_HEIGHT,
+        reward.x / SCREEN_WIDTH, reward.y / SIMULATION_PANEL_HEIGHT,
+        obstacle.x / SCREEN_WIDTH, obstacle.y / SIMULATION_PANEL_HEIGHT
     ]
     return torch.FloatTensor(state).unsqueeze(0)
 
@@ -86,26 +86,27 @@ def main():
     # --- GUI Setup ---
     theme_path = os.path.join(os.path.dirname(__file__), 'theme.json')
     ui_manager = pygame_gui.UIManager((SCREEN_WIDTH, SCREEN_HEIGHT), theme_path)
+
+    # Top panel for the simulation
     sim_panel = pygame_gui.elements.UIPanel(
-        relative_rect=pygame.Rect((0, 0), (SIMULATION_PANEL_WIDTH, SCREEN_HEIGHT)),
+        relative_rect=pygame.Rect((0, 0), (SCREEN_WIDTH, SIMULATION_PANEL_HEIGHT)),
         manager=ui_manager,
-        anchors={'left': 'left', 'right': 'left', 'top': 'top', 'bottom': 'bottom'}
+        anchors={'left': 'left', 'right': 'right', 'top': 'top', 'bottom': 'top'}
     )
+    # Bottom panel for the MLP visualization
     mlp_panel = pygame_gui.elements.UIPanel(
-        relative_rect=pygame.Rect((SIMULATION_PANEL_WIDTH, 0), (MLP_PANEL_WIDTH, SCREEN_HEIGHT)),
+        relative_rect=pygame.Rect((0, SIMULATION_PANEL_HEIGHT), (SCREEN_WIDTH, MLP_PANEL_HEIGHT)),
         manager=ui_manager,
-        anchors={'left': 'left', 'right': 'right', 'top': 'top', 'bottom': 'bottom'}
+        anchors={'left': 'left', 'right': 'right', 'top': 'bottom', 'bottom': 'bottom'}
     )
-    # Note: True resizability requires handling pygame.VIDEORESIZE events and updating panel rects,
-    # which is complex. The anchoring provides basic resizing with the main window.
 
     mlp_visualizer = MLPVisualizer(model)
     clock = pygame.time.Clock()
 
     # --- Game Objects (coordinates are relative to the sim_panel) ---
-    unit = pygame.Rect(100, 300, 25, 25)
-    reward = pygame.Rect(600, 300, 20, 20) # Adjusted for 800 width
-    obstacle = pygame.Rect(350, 250, 50, 100) # Adjusted for 800 width
+    unit = pygame.Rect(100, 250, 25, 25)
+    reward = pygame.Rect(700, 250, 20, 20)
+    obstacle = pygame.Rect(400, 150, 50, 100)
 
     episode, total_reward, frame_count = 0, 0, 0
     running = True
@@ -122,7 +123,10 @@ def main():
                 ui_manager.set_window_resolution((event.w, event.h))
                 background_surface = pygame.Surface((event.w, event.h))
                 background_surface.fill(pygame.Color('#101010'))
+
+            # Pass events to the UI manager and the visualizer
             ui_manager.process_events(event)
+            mlp_visualizer.handle_event(event, mlp_panel.get_abs_rect())
 
         # --- Agent's Turn ---
         current_state = get_state(unit, reward, obstacle)
@@ -138,7 +142,7 @@ def main():
         done = False
         if unit.colliderect(reward):
             reward_val, done = 10.0, True
-        elif unit.colliderect(obstacle) or unit.left < 0 or unit.right > SIMULATION_PANEL_WIDTH or unit.top < 0 or unit.bottom > SCREEN_HEIGHT:
+        elif unit.colliderect(obstacle) or unit.left < 0 or unit.right > SCREEN_WIDTH or unit.top < 0 or unit.bottom > SIMULATION_PANEL_HEIGHT:
             reward_val, done = -10.0, True
         if frame_count >= MAX_FRAMES_PER_EPISODE:
             reward_val, done = -5.0, True
@@ -219,19 +223,19 @@ def take_screenshot(filename):
     theme_path = os.path.join(os.path.dirname(__file__), 'theme.json')
     ui_manager = pygame_gui.UIManager((SCREEN_WIDTH, SCREEN_HEIGHT), theme_path)
     sim_panel = pygame_gui.elements.UIPanel(
-        relative_rect=pygame.Rect((0, 0), (SIMULATION_PANEL_WIDTH, SCREEN_HEIGHT)),
+        relative_rect=pygame.Rect((0, 0), (SCREEN_WIDTH, SIMULATION_PANEL_HEIGHT)),
         manager=ui_manager)
     mlp_panel = pygame_gui.elements.UIPanel(
-        relative_rect=pygame.Rect((SIMULATION_PANEL_WIDTH, 0), (MLP_PANEL_WIDTH, SCREEN_HEIGHT)),
+        relative_rect=pygame.Rect((0, SIMULATION_PANEL_HEIGHT), (SCREEN_WIDTH, MLP_PANEL_HEIGHT)),
         manager=ui_manager)
 
     # --- Model and Visualizer ---
     mlp_visualizer = MLPVisualizer(model)
 
     # --- Game Objects ---
-    unit = pygame.Rect(100, 300, 25, 25)
-    reward = pygame.Rect(600, 300, 20, 20)
-    obstacle = pygame.Rect(350, 250, 50, 100)
+    unit = pygame.Rect(100, 250, 25, 25)
+    reward = pygame.Rect(700, 250, 20, 20)
+    obstacle = pygame.Rect(400, 150, 50, 100)
 
     # --- Trigger one forward pass to populate hooks ---
     initial_state = get_state(unit, reward, obstacle)
