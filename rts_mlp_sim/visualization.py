@@ -98,7 +98,7 @@ class MLPVisualizer:
         layer_sizes = [layers[0].in_features] + [l.out_features for l in layers]
 
         # Define the world-space dimensions of the network layout
-        world_width, world_height = 800, 400
+        world_width, world_height = 600, 250 # Adjusted height to fit in the bottom panel
 
         node_positions = []
         for i, size in enumerate(layer_sizes):
