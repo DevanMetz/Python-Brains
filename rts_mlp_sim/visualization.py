@@ -111,10 +111,13 @@ class MLPVisualizer:
 
         # --- Draw Connections (Weights) ---
         line_width = max(1, int(1 * self.zoom))
+        line_surf = pygame.Surface(surface.get_size(), pygame.SRCALPHA) # Optimized: one surface for all lines
         with torch.no_grad():
             for i, layer in enumerate(layers):
                 weights = layer.weight.data
                 max_weight = weights.abs().max()
+                if max_weight == 0: continue # Safeguard
+
                 for j, start_node_world in enumerate(node_positions[i]):
                     for k, end_node_world in enumerate(node_positions[i+1]):
                         start_node_screen = self.world_to_screen(start_node_world.x, start_node_world.y, surface)
@@ -124,10 +127,9 @@ class MLPVisualizer:
                         alpha = int(255 * min(1.0, abs(weight) / max_weight))
                         color = (0, 255, 0, alpha) if weight > 0 else (255, 0, 0, alpha)
 
-                        # Use a temporary surface for alpha blending
-                        line_surf = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
                         pygame.draw.line(line_surf, color, start_node_screen, end_node_screen, line_width)
-                        surface.blit(line_surf, (0,0))
+
+        surface.blit(line_surf, (0,0)) # Optimized: blit once
 
         # --- Draw Neurons (Activations) ---
         node_radius = max(2, int(5 * self.zoom))
@@ -147,10 +149,12 @@ class MLPVisualizer:
             if layer_name in self.activations:
                 activations = self.activations[layer_name][0]
                 max_act = activations.abs().max()
+                if max_act == 0: continue # Safeguard
+
                 for j, pos_world in enumerate(node_positions[i+1]):
                     pos_screen = self.world_to_screen(pos_world.x, pos_world.y, surface)
                     activation = activations[j]
-                    color_val = int(255 * min(1.0, abs(activation) / max_act if max_act > 0 else 0))
+                    color_val = int(255 * min(1.0, abs(activation) / max_act))
                     pygame.draw.circle(surface, (0, color_val, color_val), pos_screen, node_radius)
 
         # --- Draw Labels ---
